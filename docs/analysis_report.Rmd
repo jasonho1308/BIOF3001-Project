@@ -1,0 +1,128 @@
+---
+title: "Epigenetic Aging Analysis Report"
+author: "BIOF3001 Project"
+date: "`r Sys.Date()`"
+output:
+  html_document:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    highlight: tango
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, warning = FALSE, message = FALSE)
+library(ggplot2)
+library(dplyr)
+library(knitr)
+```
+
+# Introduction
+
+This report presents the analysis of DNA methylation data to investigate epigenetic aging and age acceleration.
+
+## Background
+
+Epigenetic clocks use DNA methylation patterns to estimate biological age. Age acceleration occurs when epigenetic age exceeds chronological age, potentially indicating accelerated aging processes.
+
+# Data Overview
+
+```{r data-loading, eval=FALSE}
+# Load processed data
+# data <- readRDS("data/processed/methylation_processed.rds")
+
+# Display summary statistics
+# summary(data)
+```
+
+## Sample Characteristics
+
+```{r sample-stats, eval=FALSE}
+# Display sample information
+# table(data$sex)
+# summary(data$age)
+```
+
+# Epigenetic Age Calculation
+
+## Horvath Clock
+
+```{r horvath-clock, eval=FALSE}
+# Calculate Horvath epigenetic age
+# epigenetic_age <- calculate_horvath_age(methylation_data)
+```
+
+## Age Acceleration
+
+```{r age-acceleration, eval=FALSE}
+# Calculate age acceleration
+# age_accel <- epigenetic_age - chronological_age
+```
+
+# Results
+
+## Age Correlation
+
+```{r age-correlation, eval=FALSE}
+# Scatter plot of epigenetic age vs chronological age
+# ggplot(data, aes(x = chronological_age, y = epigenetic_age)) +
+#   geom_point(alpha = 0.6) +
+#   geom_smooth(method = "lm", color = "blue") +
+#   geom_abline(slope = 1, intercept = 0, linetype = "dashed", color = "red") +
+#   labs(
+#     title = "Epigenetic Age vs Chronological Age",
+#     x = "Chronological Age (years)",
+#     y = "Epigenetic Age (years)"
+#   ) +
+#   theme_minimal()
+```
+
+## Age Acceleration Distribution
+
+```{r age-accel-dist, eval=FALSE}
+# Histogram of age acceleration
+# ggplot(data, aes(x = age_acceleration)) +
+#   geom_histogram(bins = 30, fill = "steelblue", alpha = 0.7) +
+#   geom_vline(xintercept = 0, linetype = "dashed", color = "red") +
+#   labs(
+#     title = "Distribution of Age Acceleration",
+#     x = "Age Acceleration (years)",
+#     y = "Count"
+#   ) +
+#   theme_minimal()
+```
+
+## Statistical Tests
+
+```{r statistical-tests, eval=FALSE}
+# Correlation test
+# cor.test(data$chronological_age, data$epigenetic_age)
+
+# Linear regression
+# model <- lm(epigenetic_age ~ chronological_age, data = data)
+# summary(model)
+```
+
+# Discussion
+
+## Key Findings
+
+1. Relationship between epigenetic and chronological age
+2. Factors associated with age acceleration
+3. Biological implications
+
+## Limitations
+
+- Sample size considerations
+- Platform-specific effects
+- Confounding factors
+
+# Conclusions
+
+Summary of main results and their implications for understanding epigenetic aging.
+
+# Session Information
+
+```{r session-info}
+sessionInfo()
+```
