@@ -2,10 +2,10 @@ barcodes_small <- c("TCGA-E9-A1N8-11A", "TCGA-E2-A1BC-11A", "TCGA-E9-A1ND-11A", 
 
 # This line searches in the database and builds the query, selecting the beta values data from the TCGA project, pulling only the files for the 4 samples. This will take 2-3 minutes
 query_TCGA_meth <- GDCquery(
-    project       = "TCGA-BRCA",
-    data.category = "DNA Methylation",
-    data.type     = "Methylation Beta Value",
-    barcode       = barcodes_small # <— restrict to just these 4 samples
+  project       = "TCGA-BRCA",
+  data.category = "DNA Methylation",
+  data.type     = "Methylation Beta Value",
+  barcode       = barcodes_small # <— restrict to just these 4 samples
 )
 
 # To extract and view the metadata of the data we'll be downloading:
@@ -37,11 +37,11 @@ chron_age <- prediction$age
 clock_cols <- colnames(prediction[, c(2, 5, 8, 12, 15, 18, 21, 24, 27)])
 
 scatter_plots <- lapply(clock_cols, function(clock) {
-    ggplot(prediction, aes(x = age, y = !!sym(clock))) +
-        geom_point(alpha = 0.5) +
-        geom_smooth(method = "lm", color = "red") +
-        labs(title = clock, x = "Chronological Age", y = "Predicted DNAmAge") +
-        theme_minimal()
+  ggplot(prediction, aes(x = age, y = !!sym(clock))) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "lm", color = "red") +
+    labs(title = clock, x = "Chronological Age", y = "Predicted DNAmAge") +
+    theme_minimal()
 })
 
 scatter_grid <- wrap_plots(scatter_plots, ncol = 3)
