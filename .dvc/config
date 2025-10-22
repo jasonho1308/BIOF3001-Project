@@ -1,0 +1,4 @@
+[core]
+    remote = store
+['remote "store"']
+    url = /home/u3622931/shared/dvcstore
