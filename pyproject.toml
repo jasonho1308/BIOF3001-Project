@@ -8,3 +8,8 @@ dependencies = [
     "dvc>=3.63.0",
     "dvc-ssh>=4.2.2",
 ]
+
+[dependency-groups]
+dev = [
+    "pandas>=2.3.3",
+]
