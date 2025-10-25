@@ -1,0 +1,6 @@
+outs:
+- md5: 42562611c83b44cbf79c319937a0475a.dir
+  size: 10090524257
+  nfiles: 1113
+  hash: md5
+  path: GDCdata
