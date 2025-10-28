@@ -1,0 +1,16 @@
+[project]
+name = "biof3001-project"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "dvc>=3.63.0",
+    "dvc-ssh>=4.2.2",
+    "dvc-webdav>=3.0.0",
+]
+
+[dependency-groups]
+dev = [
+    "pandas>=2.3.3",
+]

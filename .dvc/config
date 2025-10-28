@@ -1,4 +1,4 @@
 [core]
     remote = store
 ['remote "store"']
-    url = /home/u3622931/shared/dvcstore
+    url = ssh://user@hpc02.sbms.hku.hk:22/home/hchjason/shared/dvcstore/
