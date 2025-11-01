@@ -76,3 +76,17 @@ for (proj in names(gdc_queries)) {
     height = 10
   )
 }
+
+# read from saved scatter plots dir and save all to a new page generated results to a pdf
+png_files <- list.files("results/clock/gdc_pan/", pattern = "_methylclock_scatterplots.png", full.names = TRUE)
+pdf("results/clock/gdc_pan/gdc_pancan_methylclock_scatterplots.pdf")
+# loop through each png file and add to pdf to separate pages
+for (png_file in png_files) {
+  img <- png::readPNG(png_file)
+  grid::grid.raster(img)
+  # don't create new page after the last image
+  if (png_file != tail(png_files, n = 1)) {
+    grid::grid.newpage()
+  }
+}
+dev.off()
