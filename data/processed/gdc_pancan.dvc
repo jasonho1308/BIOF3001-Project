@@ -1,0 +1,6 @@
+outs:
+- md5: f6c421aa9d4c6cb41a6a8e92340ca0c8.dir
+  size: 2202352
+  nfiles: 4
+  hash: md5
+  path: gdc_pancan
