@@ -37,7 +37,7 @@ split_tibble <- function(tibble, col = "col") tibble %>% split(., .[, col])
 
 normal_samples_by_project <- split_tibble(normal_samples, "project.project_id")
 
-# count each samples by project
+# count samples by project
 sample_counts <- sapply(normal_samples_by_project, nrow)
 print(sample_counts)
 
