@@ -39,7 +39,7 @@ for (proj in names(gdc_queries)) {
 
   # prepare data for methylclock
 
-  data <- assay(me_TCGA) # converts to useable matrix
+  data <- assay(me_TCGA) # converts to usable matrix
   data <- na.omit(data)
   samples <- colnames(data)
 
