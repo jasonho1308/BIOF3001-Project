@@ -27,9 +27,6 @@ for (proj in names(gdc_queries)) {
     error = function(e) {
       message(paste("Error preparing data for project:", proj))
       message(e)
-
-      # skip to next iteration, outside of function scope
-      return(NULL)
     }
   )
   if (is.null(me_TCGA)) {
