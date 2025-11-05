@@ -47,7 +47,7 @@ What the enrichment step does
 
 C. Scripts
 ----------
-1) `scripts/analysis_GEO.py` (metadata enrichment)
+1) `scripts/extract_meta_GEO.py` 
 - Purpose: parse `GSE213478_series_matrix.txt`, expand characteristics into columns, perform regex/coercion for age/sex/tissue/donor, and write a single canonical enriched CSV: `data/geo/processed/gse213478_metadata_parsed_enriched.csv`.
 - Behavior: intentionally writes only the enriched CSV (no separate parsed-only CSV by default). It provides CLI flags `--series` and `--outdir` so you can re-run with alternate paths.
 - Key functions: `read_series_matrix`, `parse_sample_headers`, `build_records`, `regex_extract_basic`, `parse_characteristics_text`, `coerce_age_from_fields`, `coerce_sex_from_fields`, `normalize_tissue`.
@@ -55,14 +55,6 @@ C. Scripts
 2) `scripts/extract_betas.py` (beta matrix streaming extractor)
 - Purpose: stream the large gzipped methylation matrix in `data/geo/raw/` and write a tab-separated gzipped file of probe rows with no NA values: `data/geo/processed/GSE213478_betas_only.tsv.gz`.
 - Behavior: reads the gzipped input line-by-line, writes header (ensuring the first column is `probe` when empty), and skips rows containing NA/empty cells. It aims to produce a cleaned beta matrix suitable for downstream analysis.
-
-D. Quick status & recommended next steps
-----------------------------------------
-- Optional improvements:
-  - Add `data/geo/README.md` describing folder layout and canonical files (I can add this for you).
-  - Add an environment manifest (`requirements.txt` or `environment.yml`) to avoid binary incompatibilities when running the scripts (noted earlier: numpy/pandas binary warnings appeared during runs).
-  - Add a `--write-parsed` CLI flag to `analysis_GEO.py` if you'd like both parsed-only and enriched outputs.
-  - Add a small smoke-check (script or unit test) to validate that `age_num_parsed` is numeric for most rows and to count missing parsed fields.
 
 
 Command for self revise damn

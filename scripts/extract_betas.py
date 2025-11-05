@@ -12,8 +12,8 @@ import csv
 import sys
 
 PROJECT = Path.cwd()
-INP = PROJECT / 'data' / 'geo' / 'GSE213478_methylation_DNAm_noob_final_BMIQ_all_tissues_987.txt.gz'
-OUTP = PROJECT / 'data' / 'geo' / 'GSE213478_betas_only.tsv.gz'
+INP = PROJECT / 'data' / 'geo' / 'raw' / 'GSE213478_methylation_DNAm_noob_final_BMIQ_all_tissues_987.txt.gz'
+OUTP = PROJECT / 'data' / 'geo' / 'processed' / 'GSE213478_betas_only.tsv.gz'
 
 def main():
     if not INP.exists():
