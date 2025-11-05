@@ -1,0 +1,71 @@
+GEO folder summary — GSE213478 
+
+Date: 2025-11-05
+Repository path: /Users/user/BIOF_3001/Project/data/geo
+Branch: GEO_ENCODE_Data
+
+Overview
+--------
+This report summarizes the current state of the `data/geo` folder and the two extraction scripts in `scripts/` (the metadata enrichment script `analysis_GEO.py` and the beta extractor `extract_betas.py`). It was written automatically and includes file lists, the enriched metadata row count, and the main columns produced by the enrichment step.
+
+A. data/geo layout and contents
+--------------------------------
+data/geo/raw/ (original/raw inputs):
+- .gitignore
+- GSE213478_methylation_DNAm_noob_final_BMIQ_all_tissues_987.txt.gz
+- GSE213478_methylation_DNAm_noob_final_BMIQ_all_tissues_987.txt.gz.dvc
+- GSE213478_series_matrix.txt
+- GSE213478_series_matrix.txt.dvc
+
+data/geo/processed/ (derived outputs):
+- .gitignore
+- GSE213478_betas_only.tsv.gz
+- GSE213478_betas_only.tsv.gz.dvc
+- gse213478_metadata_parsed_enriched.csv
+- gse213478_metadata_parsed_enriched.csv.dvc
+
+Notes on DVC
+------------
+- Each of the large binary objects above has an accompanying `.dvc` metadata file (where applicable). The presence of the `.dvc` file indicates the object is tracked by the project's data-versioning system. Use `dvc status -c` from the project root to verify remote push status; some outputs may still show as "new" until `dvc push` is run from an environment with remote credentials.
+
+B. Enriched metadata CSV (canonical parsed output)
+--------------------------------------------------
+File: data/geo/processed/gse213478_metadata_parsed_enriched.csv
+Line count (wc -l): 988 (includes header)
+Sample count (lines minus header): 987
+
+Header / columns (first line):
+GSM, title, tissue, age_raw, age_num, sex, donor_id, characteristics, status, submission_date, last_update_date, type, channel_count, source_name_ch1, organism_ch1, molecule_ch1, extract_protocol_ch1, label_ch1, label_protocol_ch1, taxid_ch1, hyb_protocol, scan_protocol, description, data_processing, platform_id, contact_name, contact_email, contact_laboratory, contact_department, contact_institute, contact_address, contact_city, contact_state, contact_zip_postal_code, contact_country, supplementary_file, data_row_count, sample_plate, sample_plate_position, sentrix_id, sentrix_position, participant_id, sample_id, collaborator_participant_id, autolysis_score, age, smoker_status, age_raw_parsed, age_num_parsed, sex_parsed
+
+What the enrichment step does
+------------------------------
+- Aggregates all `!Sample_characteristics_*` header lines from the GEO `series_matrix.txt` into one `characteristics` free-text column per sample (joined by " | ").
+- Applies regex-based extraction to pull out common fields where present: tissue, age (supports ranges like "20-29"), sex (supports numeric encodings and M/F), and donor/participant IDs.
+- Expands `characteristics` into separate normalized key:value columns. Keys are normalized to snake_case (e.g. "collaborator participant id" → "collaborator_participant_id"). Duplicate keys are concatenated with " | ".
+- Coerces age into numeric midpoint when provided as a range (e.g. "20-29" → 24.5) and writes `age_raw_parsed` and `age_num_parsed` columns.
+- Normalizes sex into `sex_parsed` (values `M`/`F` where possible) and normalizes whitespace in tissue names.
+
+C. Scripts
+----------
+1) `scripts/analysis_GEO.py` (metadata enrichment)
+- Purpose: parse `GSE213478_series_matrix.txt`, expand characteristics into columns, perform regex/coercion for age/sex/tissue/donor, and write a single canonical enriched CSV: `data/geo/processed/gse213478_metadata_parsed_enriched.csv`.
+- Behavior: intentionally writes only the enriched CSV (no separate parsed-only CSV by default). It provides CLI flags `--series` and `--outdir` so you can re-run with alternate paths.
+- Key functions: `read_series_matrix`, `parse_sample_headers`, `build_records`, `regex_extract_basic`, `parse_characteristics_text`, `coerce_age_from_fields`, `coerce_sex_from_fields`, `normalize_tissue`.
+
+2) `scripts/extract_betas.py` (beta matrix streaming extractor)
+- Purpose: stream the large gzipped methylation matrix in `data/geo/raw/` and write a tab-separated gzipped file of probe rows with no NA values: `data/geo/processed/GSE213478_betas_only.tsv.gz`.
+- Behavior: reads the gzipped input line-by-line, writes header (ensuring the first column is `probe` when empty), and skips rows containing NA/empty cells. It aims to produce a cleaned beta matrix suitable for downstream analysis.
+
+D. Quick status & recommended next steps
+----------------------------------------
+- Optional improvements:
+  - Add `data/geo/README.md` describing folder layout and canonical files (I can add this for you).
+  - Add an environment manifest (`requirements.txt` or `environment.yml`) to avoid binary incompatibilities when running the scripts (noted earlier: numpy/pandas binary warnings appeared during runs).
+  - Add a `--write-parsed` CLI flag to `analysis_GEO.py` if you'd like both parsed-only and enriched outputs.
+  - Add a small smoke-check (script or unit test) to validate that `age_num_parsed` is numeric for most rows and to count missing parsed fields.
+
+
+Command for self revise damn
+- dvc pull
+- dvc status -c (checking)
+- dvc push
