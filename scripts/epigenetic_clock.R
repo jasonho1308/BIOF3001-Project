@@ -5,6 +5,8 @@ library(sesameData)
 library(ggplot2)
 library(SummarizedExperiment)
 library(patchwork)
+library(dplyr)
+library(tidyr)
 
 gdc_queries <- readRDS("data/processed/gdc_pancan/queries.rds")
 
@@ -22,8 +24,6 @@ prediction_store <- data.frame()
 for (proj in names(gdc_queries)) {
   print(paste("Processing project:", proj))
   query_TCGA_meth <- gdc_queries[[proj]]
-  # View query results
-  res_TCGA_meth <- getResults(query_TCGA_meth)
 
   me_TCGA <- NULL
   tryCatch(
@@ -34,6 +34,7 @@ for (proj in names(gdc_queries)) {
     }
   )
   if (is.null(me_TCGA)) {
+    message(paste("No data available for project:", proj))
     next
   }
   dim(me_TCGA)
@@ -42,7 +43,6 @@ for (proj in names(gdc_queries)) {
 
   data <- assay(me_TCGA) # converts to usable matrix
   data <- na.omit(data)
-  samples <- colnames(data)
 
   age <- me_TCGA$age_at_index
 
@@ -52,98 +52,163 @@ for (proj in names(gdc_queries)) {
   # makes prediction based on methylation data of normal samples
   prediction <- DNAmAge(data, age = age, cell.count = FALSE)
 
-  # Store elements for whole pancan analysis later
-  prediction_store <- prediction[, store_items]
+  # Merge elements for whole pancan analysis later
+  prediction_store <- rbind(prediction_store, prediction[, store_items])
 
   # Scatter plots with regression lines using tidy evaluation
   chron_age <- prediction$age
-  clock_cols <- c("Horvath", "Hannum", "Levine", "BNN",
-                  "skinHorvath", "Wu", "TL", "BLUP", "EN", "PedBE")
+  clock_cols <- c(
+    "Horvath", "Hannum", "Levine", "BNN",
+    "skinHorvath", "Wu", "TL", "BLUP", "EN", "PedBE"
+  )
 
   scatter_plots <- lapply(clock_cols, function(clock) {
     ggplot(prediction, aes(x = age, y = !!sym(clock))) +
       geom_point(alpha = 0.5) +
-      geom_smooth(method = "lm", color = "red") +
+      geom_smooth(method = "lm", color = "red", formula = y ~ x) +
       labs(title = clock, x = "Chronological Age", y = "Predicted DNAmAge") +
       theme_minimal()
   })
 
   scatter_grid <- wrap_plots(scatter_plots, ncol = 3)
 
-
-
   # add title to the combined plot
   scatter_grid <- scatter_grid +
     plot_annotation(title = paste("DNAm Age Predictions for", proj))
 
   ggsave(
-    filename = paste0("results/clock/gdc_pan/", proj, "_methylclock_scatterplots.png"),
+    filename = paste0("results/clock/gdc_pan/", proj, "_scatterplots.png"),
     plot = scatter_grid,
     width = 15,
     height = 10
   )
 
   # Boxplots of residuals
-  residual_cols <- c("ageAcc2.Horvath", "ageAcc2.Hannum", "ageAcc2.Levine",
-                     "ageAcc2.BNN", "ageAcc2.skinHorvath", "ageAcc2.Wu",
-                     "ageAcc2.TL", "ageAcc2.BLUP", "ageAcc2.EN",
-                     "ageAcc2.PedBE")
-  residual_plots <- lapply(residual_cols, function(res_col) {
-    # Skip when column not found
-    if (!res_col %in% colnames(prediction)) {
-      return(NULL)
-    }
-    ggplot(prediction, aes(x = "", y = !!sym(res_col))) +
-      geom_boxplot() +
-      labs(title = gsub("ageAcc2.", "", res_col),
-           y = "Residuals") +
-      theme_minimal()
-  })
-  # Remove NULL plots
-  residual_plots <- Filter(Negate(is.null), residual_plots)
-  residual_grid <- wrap_plots(residual_plots, ncol = 3) +
-    plot_annotation(title = paste("DNAm Age Residuals for", proj))
+  residual_cols <- c(
+    "ageAcc2.Horvath", "ageAcc2.Hannum", "ageAcc2.Levine",
+    "ageAcc2.BNN", "ageAcc2.skinHorvath", "ageAcc2.Wu",
+    "ageAcc2.TL", "ageAcc2.BLUP", "ageAcc2.EN",
+    "ageAcc2.PedBE"
+  )
+  residuals_long <- prediction %>%
+    mutate(sample_id = seq_len(n())) %>%
+    pivot_longer(
+      cols = all_of(clock_cols),
+      names_to = "clock", values_to = "pred"
+    ) %>%
+    group_by(clock) %>%
+    mutate(
+      residual = {
+        ok <- !is.na(pred) & !is.na(age)
+        res_vec <- rep(NA_real_, n())
+        if (sum(ok) >= 2) {
+          res_vec[ok] <- stats::resid(stats::lm(pred[ok] ~ age[ok]))
+        }
+        res_vec
+      }
+    ) %>%
+    ungroup() %>%
+    mutate(clock = factor(clock, levels = clock_cols))
+
+  residual_plot <- ggplot(residuals_long, aes(x = clock, y = residual)) +
+    geom_boxplot(na.rm = TRUE) +
+    labs(
+      title = paste("Residuals by clock for", proj),
+      x = "Clock", y = "Residual (predicted - fitted)"
+    ) +
+    theme_minimal() +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
   ggsave(
-      filename = paste0("results/clock/gdc_pan/", proj, "_methylclock_residuals_boxplots.png"),
-      plot = residual_grid,
-      width = 15,
-      height = 10
-    )
+    filename = paste0("results/clock/gdc_pan/", proj, "_residuals_boxplots.png"),
+    plot = residual_plot,
+    width = 12,
+    height = 6
+  )
 }
 
 # Pancan-wide clock calculation and plotting
 # Residuals calculation
-residuals_store <- data.frame()
+# initialize empty data frame for residuals with em
+residuals_store <- data.frame(id = seq_len(nrow(prediction_store)))
 for (clock in colnames(prediction_store)) {
-  if (clock == "age") {
+  if (clock == "age" || all(is.na(prediction_store[[clock]]))) {
     next
   }
   model <- lm(prediction_store[[clock]] ~ prediction_store$age)
-  residuals_store[[paste0(clock, "_residuals")]] <- resid(model)
+  # insert NA for skipped samples
+  residuals <- rep(NA, nrow(prediction_store))
+  ok <- !is.na(prediction_store[[clock]]) & !is.na(prediction_store$age)
+  residuals[ok] <- stats::resid(model)[ok]
+  residuals_store <- cbind(
+    residuals_store,
+    setNames(
+      data.frame(residuals),
+      paste0(clock, "_residuals")
+    )
+  )
 }
 # Combine predictions and residuals
 combined_store <- cbind(prediction_store, residuals_store)
 
-# Plot boxplots of residuals
-residual_plots <- lapply(colnames(residuals_store), function(res_clock) {
-  # Skip when column not found
-  if (!res_clock %in% colnames(combined_store)) {
-    return(NULL)
-  }
-  ggplot(combined_store, aes(x = "", y = !!sym(res_clock))) +
-    geom_boxplot() +
-    labs(title = paste("Residuals of", gsub("_residuals", "", res_clock)),
-         y = "Residuals") +
+# create scatter plots for pancan data in a grid layout
+scatter_plots <- lapply(clock_cols, function(clock) {
+  ggplot(combined_store, aes(x = age, y = !!sym(clock))) +
+    geom_point(alpha = 0.5) +
+    geom_smooth(method = "lm", color = "red", formula = y ~ x) +
+    labs(title = clock, x = "Chronological Age", y = "Predicted DNAmAge") +
     theme_minimal()
 })
-residual_grid <- wrap_plots(residual_plots, ncol = 3) +
-  plot_annotation(title = "DNAm Age Residuals for GDC Pancan")
+
+scatter_grid <- wrap_plots(scatter_plots, ncol = 3)
+
+# add title to the combined plot
+scatter_grid <- scatter_grid +
+  plot_annotation(title = paste("DNAm Age Predictions for GDC Pan-Cancer"))
+
 ggsave(
-    filename = "results/clock/gdc_pan/gdc_pancan_methylclock_residuals_boxplots.png",
-    plot = residual_grid,
-    width = 15,
-    height = 10
-  )
+  filename = paste0("results/clock/gdc_pan/gdc_pancan_scatterplots.png"),
+  plot = scatter_grid,
+  width = 15,
+  height = 10
+)
+
+# Plot boxplots of residuals
+residuals_long <- combined_store %>%
+  mutate(sample_id = seq_len(n())) %>%
+  pivot_longer(
+    cols = all_of(clock_cols),
+    names_to = "clock", values_to = "pred"
+  ) %>%
+  group_by(clock) %>%
+  mutate(
+    residual = {
+      ok <- !is.na(pred) & !is.na(age)
+      res_vec <- rep(NA_real_, n())
+      if (sum(ok) >= 2) {
+        res_vec[ok] <- stats::resid(stats::lm(pred[ok] ~ age[ok]))
+      }
+      res_vec
+    }
+  ) %>%
+  ungroup() %>%
+  mutate(clock = factor(clock, levels = clock_cols))
+
+residual_plot <- ggplot(residuals_long, aes(x = clock, y = residual)) +
+  geom_boxplot(na.rm = TRUE) +
+  labs(
+    title = paste("Residuals by clock for GDC Pan-Cancer"),
+    x = "Clock", y = "Residual (predicted - fitted)"
+  ) +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave(
+  filename = "results/clock/gdc_pan/gdc_pancan_residuals_boxplots.png",
+  plot = residual_plot,
+  width = 15,
+  height = 10
+)
 
 # read from saved scatter plots dir and save all to a new page generated results to a pdf
 png_files <- list.files("results/clock/gdc_pan/", pattern = ".png", full.names = TRUE)
