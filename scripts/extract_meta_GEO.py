@@ -18,7 +18,6 @@ import argparse
 import re
 from pathlib import Path
 from typing import Dict
-
 import pandas as pd
 
 
@@ -217,9 +216,8 @@ def coerce_sex_from_fields(row):
             s = str(row[candidate]).strip()
             if s in ("1", "2"):
                 return "M" if s == "1" else "F"
-            s2 = s[0].upper()
-            if s2 in ("M", "F"):
-                return s2
+            if s and s[0].upper() in ("M", "F"):
+                return s[0].upper()
     return row.get("sex", "")
 
 

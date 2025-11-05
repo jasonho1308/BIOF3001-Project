@@ -6,7 +6,7 @@ Branch: GEO_ENCODE_Data
 
 Overview
 --------
-This report summarizes the current state of the `data/geo` folder and the two extraction scripts in `scripts/` (the metadata enrichment script `analysis_GEO.py` and the beta extractor `extract_betas.py`). It was written automatically and includes file lists, the enriched metadata row count, and the main columns produced by the enrichment step.
+This report summarizes the current state of the `data/geo` folder and the two extraction scripts in `scripts/` (the metadata enrichment script `extract_meta_GEO.py` and the beta extractor `extract_betas.py`). It was written automatically and includes file lists, the enriched metadata row count, and the main columns produced by the enrichment step.
 
 A. data/geo layout and contents
 --------------------------------
@@ -56,8 +56,3 @@ C. Scripts
 - Purpose: stream the large gzipped methylation matrix in `data/geo/raw/` and write a tab-separated gzipped file of probe rows with no NA values: `data/geo/processed/GSE213478_betas_only.tsv.gz`.
 - Behavior: reads the gzipped input line-by-line, writes header (ensuring the first column is `probe` when empty), and skips rows containing NA/empty cells. It aims to produce a cleaned beta matrix suitable for downstream analysis.
 
-
-Command for self revise damn
-- dvc pull
-- dvc status -c (checking)
-- dvc push
