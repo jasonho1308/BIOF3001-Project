@@ -3,10 +3,9 @@
 
 This script reads a GEO series_matrix file, parses the !Sample_ header lines,
 extracts sample metadata, expands free-text `characteristics` into key:value
-columns, normalizes common fields (age, sex, tissue, donor id), and writes two
-CSV outputs into the specified output directory:
+columns, normalizes common fields (age, sex, tissue, donor id), and writes a
+single enriched CSV output into the specified output directory:
 
-- gse213478_metadata_parsed.csv (basic parsed fields)
 - gse213478_metadata_parsed_enriched.csv (characteristics expanded)
 
 Usage:
@@ -265,12 +264,10 @@ def main():
     df_basic["sex_parsed"] = df_basic.apply(coerce_sex_from_fields, axis=1)
     df_basic["tissue"] = df_basic["tissue"].fillna("").apply(normalize_tissue)
 
-    out_basic = outdir / "gse213478_metadata_parsed.csv"
     out_enriched = outdir / "gse213478_metadata_parsed_enriched.csv"
-    df_basic.to_csv(out_basic, index=False)
+    # Write only the enriched CSV (contains parsed and expanded columns)
     df_basic.to_csv(out_enriched, index=False)
 
-    print(f"Wrote parsed CSV: {out_basic}")
     print(f"Wrote enriched CSV: {out_enriched}")
 
 
