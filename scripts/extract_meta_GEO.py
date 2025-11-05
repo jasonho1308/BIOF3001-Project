@@ -14,11 +14,11 @@ Usage:
 """
 from __future__ import annotations
 
+import pandas as pd
 import argparse
 import re
 from pathlib import Path
 from typing import Dict
-import pandas as pd
 
 
 def read_series_matrix(series_path: Path) -> str:
