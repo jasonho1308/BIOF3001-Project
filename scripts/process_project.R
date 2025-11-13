@@ -132,6 +132,12 @@ prepare_project_methylation <- function(proj, query, data_dir) {
 # Process the project
 query_TCGA_meth <- gdc_queries[[proj]]
 
+if (is.null(query_TCGA_meth)) {
+  message(sprintf("No query found for project %s in queries.rds; skipping.", proj))
+  saveRDS(data.frame(), paste0("results/clock/gdc_pan/", proj, "_predictions.rds"))
+  quit(status = 0)
+}
+
 platform_ses <- prepare_project_methylation(proj, query_TCGA_meth, "data/raw/GDCdata/")
 if (is.null(platform_ses) || !length(platform_ses)) {
   message(paste("No data available for project:", proj))
@@ -155,7 +161,6 @@ for (platform_name in names(platform_ses)) {
   }
 
   age <- SummarizedExperiment::colData(se_obj)$age_at_index
-
 
 
   platform_prediction <- tryCatch(

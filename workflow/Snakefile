@@ -2,17 +2,32 @@
 # This workflow processes TCGA projects independently to avoid reprocessing all clocks
 
 import os
+import csv
+import glob
+from snakemake.io import directory
+
+include: "rules/get_project.smk"
 
 # Get all TCGA projects from the queries file
-PROJECTS = [
-    "TCGA-BLCA", "TCGA-BRCA", "TCGA-CESC", "TCGA-CHOL", "TCGA-COAD",
-    "TCGA-ESCA", "TCGA-GBM", "TCGA-HNSC", "TCGA-KIRC", "TCGA-KIRP",
-    "TCGA-LIHC", "TCGA-LUAD", "TCGA-LUSC", "TCGA-OV", "TCGA-PAAD",
-    "TCGA-PCPG", "TCGA-PRAD", "TCGA-READ", "TCGA-SARC", "TCGA-SKCM",
-    "TCGA-STAD", "TCGA-THCA", "TCGA-THYM", "TCGA-UCEC"
-]
+PROJECTS = get_projects()
 
 os.makedirs("logs/clock/gdc_pan", exist_ok=True)
+os.makedirs("logs/gdc", exist_ok=True)
+
+# Download phenotype, build queries, and fetch GDC data
+rule download_gdc:
+    output:
+        pheno = "data/processed/gdc_pancan/normal_pheno.tsv",
+        counts = "data/processed/gdc_pancan/normal_counts_by_project.csv",
+        queries = "data/processed/gdc_pancan/queries.rds",
+        missing = "data/processed/gdc_pancan/missing_ids.rds",
+        gdcdata = directory("data/raw/GDCdata")
+    log:
+        "logs/gdc/download.log"
+    shell:
+        """
+        Rscript scripts/download_gdc_pancan.R > {log} 2>&1
+        """
 
 # Final output
 rule all:
