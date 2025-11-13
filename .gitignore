@@ -1,2 +1,5 @@
 df.rds
 results.rds
+.snakemake
+*.log
+
