@@ -1,5 +1,21 @@
 # Process individual TCGA project for epigenetic clock analysis
 
+# Get project from Snakemake params (when run via Snakemake)
+# or from command line args (when run directly)
+if (exists("snakemake")) {
+  proj <- snakemake@params$project
+  # Redirect all output to log file only (no console output)
+  log_file <- file(snakemake@log[[1]], open = "wt")
+  sink(log_file, type = "output", split = FALSE)
+  sink(log_file, type = "message", split = FALSE)
+} else {
+  args <- commandArgs(trailingOnly = TRUE)
+  if (length(args) < 1) {
+    stop("Usage: Rscript process_project.R <PROJECT_NAME>")
+  }
+  proj <- args[1]
+}
+
 library(TCGAbiolinks)
 library(methylclock)
 library(methylclockData)
@@ -11,12 +27,6 @@ library(dplyr)
 library(tidyr)
 library(rlang)
 
-args <- commandArgs(trailingOnly = TRUE)
-if (length(args) < 1) {
-  stop("Usage: Rscript process_project.R <PROJECT_NAME>")
-}
-
-proj <- args[1]
 message(paste("Processing project:", proj))
 
 # Load queries
@@ -31,11 +41,6 @@ if (!dir.exists("results/clock/gdc_pan")) {
 clock_cols <- c(
   "Horvath", "Hannum", "Levine", "BNN",
   "skinHorvath", "Wu", "TL", "BLUP", "EN", "PedBE"
-)
-
-store_items <- c(
-  "Horvath", "Hannum", "Levine", "BNN",
-  "skinHorvath", "Wu", "TL", "BLUP", "EN", "PedBE", "age"
 )
 
 build_clock_scatter <- function(prediction_df, clock) {
@@ -178,10 +183,6 @@ for (platform_name in names(platform_ses)) {
     next
   }
 
-  platform_prediction$sample_id <- rownames(platform_prediction)
-  if (is.null(platform_prediction$sample_id)) {
-    platform_prediction$sample_id <- colnames(data)
-  }
   platform_prediction$platform_source <- platform_name
   platform_prediction$project <- proj
   project_predictions[[platform_name]] <- platform_prediction
@@ -197,7 +198,7 @@ if (!length(project_predictions)) {
 prediction <- dplyr::bind_rows(project_predictions)
 
 # Save predictions for later combination
-saveRDS(prediction[, store_items], paste0("results/clock/gdc_pan/", proj, "_predictions.rds"))
+saveRDS(prediction, paste0("results/clock/gdc_pan/", proj, "_predictions.rds"))
 
 # Generate scatter plots
 scatter_plots <- lapply(clock_cols, function(clock) build_clock_scatter(prediction, clock))
@@ -222,7 +223,7 @@ residuals_long <- prediction %>%
   group_by(clock) %>%
   mutate(
     residual = {
-      ok <- !is.na(pred) & !is.na(age)
+      ok <- is.finite(pred) & is.finite(age)
       res_vec <- rep(NA_real_, n())
       if (sum(ok) >= 2) {
         res_vec[ok] <- stats::resid(stats::lm(pred[ok] ~ age[ok]))
@@ -250,3 +251,10 @@ ggsave(
 )
 
 message(paste("Successfully processed project:", proj))
+
+# Close log file if running via Snakemake
+if (exists("snakemake")) {
+  sink(type = "output")
+  sink(type = "message")
+  close(log_file)
+}

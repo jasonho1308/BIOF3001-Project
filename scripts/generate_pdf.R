@@ -1,6 +1,13 @@
 #!/usr/bin/env Rscript
 # Generate final PDF combining all plots
 
+# Setup logging if running via Snakemake
+if (exists("snakemake")) {
+  log_file <- file(snakemake@log[[1]], open = "wt")
+  sink(log_file, type = "output", split = FALSE)
+  sink(log_file, type = "message", split = FALSE)
+}
+
 library(png)
 library(grid)
 
@@ -20,7 +27,7 @@ if (length(png_files) == 0) {
 png_files <- sort(png_files)
 pancan_files <- grep("pancan", png_files, value = TRUE)
 project_files <- setdiff(png_files, pancan_files)
-png_files <- c(project_files, pancan_files)
+png_files <- c(pancan_files, project_files)
 
 message(paste("Creating PDF with", length(png_files), "plots"))
 
@@ -44,3 +51,10 @@ for (i in seq_along(png_files)) {
 dev.off()
 
 message("PDF generation complete!")
+
+# Close log file if running via Snakemake
+if (exists("snakemake")) {
+  sink(type = "output")
+  sink(type = "message")
+  close(log_file)
+}

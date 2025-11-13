@@ -24,10 +24,8 @@ rule download_gdc:
         gdcdata = directory("data/raw/GDCdata")
     log:
         "logs/gdc/download.log"
-    shell:
-        """
-        Rscript scripts/download_gdc_pancan.R > {log} 2>&1
-        """
+    script:
+        "../scripts/download_gdc_pancan.R"
 
 # Final output
 rule all:
@@ -43,12 +41,12 @@ rule process_project:
         scatter = "results/clock/gdc_pan/{project}_scatterplots.png",
         residuals = "results/clock/gdc_pan/{project}_residuals_boxplots.png",
         predictions = "results/clock/gdc_pan/{project}_predictions.rds"
+    params:
+        project = "{project}"
     log:
         "logs/clock/gdc_pan/{project}.log"
-    shell:
-        """
-        Rscript scripts/process_project.R {wildcards.project} > {log} 2>&1
-        """
+    script:
+        "../scripts/process_project.R"
 
 # Combine all project predictions and generate pancan-wide analysis
 rule combine_pancan:
@@ -60,10 +58,8 @@ rule combine_pancan:
         combined = "results/clock/gdc_pan/gdc_pancan_predictions.rds"
     log:
         "logs/clock/gdc_pan/pancan.log"
-    shell:
-        """
-        Rscript scripts/combine_pancan.R > {log} 2>&1
-        """
+    script:
+        "../scripts/combine_pancan.R"
 
 # Generate final PDF combining all plots
 rule generate_pdf:
@@ -76,7 +72,5 @@ rule generate_pdf:
         "results/clock/gdc_pan/gdc_pancan_methylclock.pdf"
     log:
         "logs/clock/gdc_pan/generate_pdf.log"
-    shell:
-        """
-        Rscript scripts/generate_pdf.R > {log} 2>&1
-        """
+    script:
+        "../scripts/generate_pdf.R"

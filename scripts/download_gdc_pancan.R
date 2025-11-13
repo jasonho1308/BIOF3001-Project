@@ -1,7 +1,15 @@
+
+
+# Setup logging if running via Snakemake
+if (exists("snakemake")) {
+  log_file <- file(snakemake@log[[1]], open = "wt")
+  sink(log_file, type = "output", split = FALSE)
+  sink(log_file, type = "message", split = FALSE)
+}
+
 library(UCSCXenaTools)
 library(dplyr)
 library(TCGAbiolinks)
-
 
 # Generate phenotype query
 xe_pheno <- XenaGenerate(subset = XenaHostNames == "gdcHub") %>%
@@ -84,3 +92,10 @@ for (proj in names(normal_samples_by_project)) {
 # save missing ids, gdc queries to processed data
 saveRDS(missing_ids, file = "data/processed/gdc_pancan/missing_ids.rds")
 saveRDS(gdc_queries, file = "data/processed/gdc_pancan/queries.rds")
+
+# Close log file if running via Snakemake
+if (exists("snakemake")) {
+  sink(type = "output")
+  sink(type = "message")
+  close(log_file)
+}

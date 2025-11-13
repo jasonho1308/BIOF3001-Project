@@ -1,5 +1,12 @@
 # Combine all project predictions and generate pan-cancer wide analysis
 
+# Setup logging if running via Snakemake
+if (exists("snakemake")) {
+  log_file <- file(snakemake@log[[1]], open = "wt")
+  sink(log_file, type = "output", split = FALSE)
+  sink(log_file, type = "message", split = FALSE)
+}
+
 library(ggplot2)
 library(patchwork)
 library(dplyr)
@@ -80,29 +87,25 @@ message(paste("Combined", nrow(prediction_store), "samples from", length(predict
 saveRDS(prediction_store, "results/clock/gdc_pan/gdc_pancan_predictions.rds")
 
 # Calculate residuals for pancan data
-residuals_store <- data.frame(id = seq_len(nrow(prediction_store)))
+residuals_list <- list()
 for (clock in colnames(prediction_store)) {
   if (clock == "age" || all(is.na(prediction_store[[clock]]))) {
     next
   }
-  ok <- !is.na(prediction_store[[clock]]) & !is.na(prediction_store$age)
+  # Check for finite values (excludes NA, NaN, Inf, -Inf)
+  ok <- is.finite(prediction_store[[clock]]) & is.finite(prediction_store$age)
   if (sum(ok) < 2) {
     next
   }
   model <- lm(prediction_store[[clock]][ok] ~ prediction_store$age[ok])
   residuals <- rep(NA, nrow(prediction_store))
   residuals[ok] <- stats::resid(model)
-  residuals_store <- cbind(
-    residuals_store,
-    setNames(
-      data.frame(residuals),
-      paste0(clock, "_residuals")
-    )
-  )
+  residuals_list[[paste0(clock, "_residuals")]] <- residuals
 }
 
 # Combine predictions and residuals
-combined_store <- cbind(prediction_store, residuals_store)
+residuals_df <- as.data.frame(residuals_list)
+combined_store <- cbind(prediction_store, residuals_df)
 
 # Create scatter plots for pancan data
 scatter_plots <- lapply(clock_cols, function(clock) build_clock_scatter(combined_store, clock))
@@ -127,7 +130,7 @@ residuals_long <- combined_store %>%
   group_by(clock) %>%
   mutate(
     residual = {
-      ok <- !is.na(pred) & !is.na(age)
+      ok <- is.finite(pred) & is.finite(age)
       res_vec <- rep(NA_real_, n())
       if (sum(ok) >= 2) {
         res_vec[ok] <- stats::resid(stats::lm(pred[ok] ~ age[ok]))
@@ -155,3 +158,10 @@ ggsave(
 )
 
 message("Pan-cancer analysis complete!")
+
+# Close log file if running via Snakemake
+if (exists("snakemake")) {
+  sink(type = "output")
+  sink(type = "message")
+  close(log_file)
+}
