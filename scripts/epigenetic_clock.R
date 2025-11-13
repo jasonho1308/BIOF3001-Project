@@ -8,6 +8,8 @@ library(patchwork)
 library(dplyr)
 library(tidyr)
 library(rlang)
+library(png)
+library(grid)
 
 gdc_queries <- readRDS("data/processed/gdc_pancan/queries.rds")
 
