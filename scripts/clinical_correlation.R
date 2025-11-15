@@ -50,17 +50,10 @@ if (!clock_name %in% colnames(predictions)) {
   ))
 }
 
-# Calculate residuals (age acceleration)
-predictions$age_acceleration <- NA
-ok_idx <- !is.na(predictions[[clock_name]]) & !is.na(predictions$age)
-
-if (sum(ok_idx) >= 2) {
-  model <- lm(predictions[[clock_name]][ok_idx] ~ predictions$age[ok_idx])
-  predictions$age_acceleration[ok_idx] <- resid(model)
-}
-
 # Binarize: accelerated (positive residual) vs decelerated (negative residual)
-predictions$accelerated <- ifelse(predictions$age_acceleration > 0, "Accelerated", "Decelerated")
+predictions$accelerated <- ifelse(predictions[[paste0(clock_name, "_residuals")]] > 0, "Accelerated", "Decelerated")
+
+predictions$accelerated <- factor(predictions$accelerated, levels = c("Accelerated", "Decelerated"))
 
 message(sprintf(
   "Age acceleration: %d accelerated, %d decelerated, %d missing",
@@ -73,17 +66,18 @@ message(sprintf(
 # Merge predictions with phenotype
 # ============================================================================
 
-# Predictions might have different sample ID format; try to match
-# If predictions have sample_id column, use it; otherwise use rownames
-if ("sample_id" %in% colnames(predictions)) {
-  predictions$sample_barcode <- substr(predictions$sample_id, 1, 15)
-} else {
-  predictions$sample_barcode <- substr(rownames(predictions), 1, 15)
-}
+
+# rename id to sample in predictions
+predictions <- predictions %>%
+  rename(sample = id)
+
+# select first 15 characters of sample_barcode in pheno to match sample ids
+predictions <- predictions %>%
+  mutate(sample = substr(sample, 1, 16))
 
 # Merge predictions with phenotype
 merged <- predictions %>%
-  select(sample, age, age_acceleration, accelerated, all_of(clock_name)) %>%
+  select(sample, age, paste0(clock_name, "_residuals"), accelerated, all_of(clock_name)) %>%
   inner_join(pheno, by = "sample")
 
 message(sprintf("Merged data: %d samples", nrow(merged)))
@@ -92,87 +86,201 @@ message(sprintf("Merged data: %d samples", nrow(merged)))
 # Binarize clinical variables
 # ============================================================================
 
-binarize_variable <- function(x) {
-  # Convert to character
-  x <- as.character(x)
-
-  # Count unique non-NA values
-  unique_vals <- unique(x[!is.na(x)])
-
-  # If already binary-like (2 unique values), map to yes/no
-  if (length(unique_vals) == 2) {
-    # Common patterns
-    if (all(tolower(unique_vals) %in% c("yes", "no"))) {
-      return(ifelse(tolower(x) == "yes", "Yes", "No"))
-    }
-    if (all(tolower(unique_vals) %in% c("male", "female"))) {
-      return(ifelse(tolower(x) == "male", "Male", "Female"))
-    }
-    if (all(tolower(unique_vals) %in% c("alive", "dead"))) {
-      return(ifelse(tolower(x) == "alive", "Alive", "Dead"))
-    }
-    # Generic binary: just use the values as-is
-    return(x)
+# Helper function to check if values are numeric strings
+is_numeric_like <- function(vals) {
+  if (!length(vals)) {
+    return(FALSE)
   }
+  all(grepl("^[-+]?([0-9]*\\.[0-9]+|[0-9]+)$", vals))
+}
 
-  # If numeric, split at median
-  if (all(!is.na(as.numeric(x[!is.na(x)])))) {
-    x_num <- as.numeric(x)
-    if (sum(!is.na(x_num)) >= 2) {
-      med <- median(x_num, na.rm = TRUE)
-      return(ifelse(x_num > med, "High", "Low"))
-    }
-  }
-
-  # If more than 2 categories, group rare ones as "Other"
-  if (length(unique_vals) > 2) {
-    # Find most common category
-    tab <- table(x, useNA = "no")
-    top_cat <- names(tab)[which.max(tab)]
-    return(ifelse(x == top_cat, top_cat, "Other"))
-  }
-
-  # Otherwise return as-is
+# Normalize input by removing placeholder values
+normalize_input <- function(x) {
+  x[x %in% c("", "Not Reported", "not reported", "Not Available", "Unknown")] <- NA
   return(x)
 }
 
-# Select clinical variables of interest
-clinical_vars <- c(
+# Binarize numerical variables via median split
+binarize_numerical <- function(x) {
+  x <- normalize_input(x)
+  x_chr <- as.character(x)
+  x_num <- suppressWarnings(as.numeric(x_chr))
+
+  # Check if we have enough valid numeric values
+  if (sum(!is.na(x_num)) < 2) {
+    return(rep(NA_character_, length(x_chr)))
+  }
+
+  # Median split
+  med <- median(x_num, na.rm = TRUE)
+  result <- ifelse(is.na(x_num), NA, ifelse(x_num > med, "High", "Low"))
+  return(result)
+}
+
+# Binarize categorical variables (keep all categories as-is)
+binarize_categorical <- function(x) {
+  x <- normalize_input(x)
+  x_chr <- as.character(x)
+  return(x_chr)
+}
+
+# Binarize multi-category variables (top category vs Other)
+binarize_multicategory <- function(x) {
+  x <- normalize_input(x)
+  x_chr <- as.character(x)
+  unique_vals <- unique(x_chr[!is.na(x_chr)])
+
+  # If too few categories, treat as categorical
+  if (length(unique_vals) <= 2) {
+    return(binarize_categorical(x))
+  }
+
+  # Many categories - keep most frequent, others -> "Other"
+  tab <- sort(table(x_chr[!is.na(x_chr)]), decreasing = TRUE)
+  top_cat <- names(tab)[1]
+
+  result <- ifelse(is.na(x_chr), NA,
+    ifelse(x_chr == top_cat, top_cat, "Other")
+  )
+  return(result)
+}
+
+# Categorize clinical variables by type
+# Numerical/continuous variables
+numerical_vars <- c(
+  "demographic.age_at_index",
+  "demographic.days_to_birth",
+  "demographic.days_to_death",
+  "demographic.year_of_birth",
+  "demographic.year_of_death",
+  "diagnoses.age_at_diagnosis",
+  "diagnoses.days_to_diagnosis",
+  "diagnoses.days_to_last_follow_up",
+  "diagnoses.year_of_diagnosis",
+  "exposures.bmi",
+  "exposures.cigarettes_per_day",
+  "exposures.height",
+  "exposures.pack_years_smoked",
+  "exposures.weight",
+  "exposures.years_smoked"
+)
+
+# Binary/categorical variables (yes/no, alive/dead, etc.)
+categorical_vars <- c(
+  "demographic.ethnicity",
   "demographic.gender",
   "demographic.race",
-  "demographic.ethnicity",
   "demographic.vital_status",
   "diagnoses.prior_malignancy",
   "diagnoses.prior_treatment",
   "diagnoses.progression_or_recurrence",
+  "diagnoses.synchronous_malignancy",
   "diagnoses.tumor_grade",
   "diagnoses.tumor_stage",
-  "exposures.alcohol_history",
-  "exposures.bmi"
+  "exposures.alcohol_history"
 )
 
-# Keep only variables that exist
+# Multi-category variables (diagnosis codes, tissue types, etc.)
+multicategory_vars <- c(
+  "diagnoses.classification_of_tumor",
+  "diagnoses.icd_10_code",
+  "diagnoses.last_known_disease_status",
+  "diagnoses.morphology",
+  "diagnoses.primary_diagnosis",
+  "diagnoses.site_of_resection_or_biopsy",
+  "diagnoses.tissue_or_organ_of_origin",
+  "project.project_id",
+  "samples.sample_type"
+)
+
+# Exclude non-useful variables (IDs, timestamps, states)
+excluded_vars <- c(
+  "demographic.created_datetime",
+  "demographic.demographic_id",
+  "demographic.state",
+  "demographic.submitter_id",
+  "demographic.updated_datetime",
+  "diagnoses.created_datetime",
+  "diagnoses.diagnosis_id",
+  "diagnoses.state",
+  "diagnoses.submitter_id",
+  "diagnoses.updated_datetime",
+  "exposures.created_datetime",
+  "exposures.exposure_id",
+  "exposures.state",
+  "exposures.submitter_id",
+  "exposures.updated_datetime",
+  "id",
+  "project.name",
+  "tissue_source_site.name",
+  "samples.is_ffpe",
+  "samples.sample_id",
+  "samples.sample_type_id",
+  "samples.tissue_type"
+)
+
+# Combine useful clinical variables
+clinical_vars <- c(numerical_vars, categorical_vars, multicategory_vars)
+
+# Keep only variables that exist in merged data
 clinical_vars <- clinical_vars[clinical_vars %in% colnames(merged)]
 
-message(sprintf("Binarizing %d clinical variables", length(clinical_vars)))
+message(sprintf("Selected %d clinical variables for analysis:", length(clinical_vars)))
+message(sprintf("  - Numerical: %d", sum(numerical_vars %in% clinical_vars)))
+message(sprintf("  - Categorical: %d", sum(categorical_vars %in% clinical_vars)))
+message(sprintf("  - Multi-category: %d", sum(multicategory_vars %in% clinical_vars)))
 
-# Binarize each variable
+message(sprintf("Processing %d clinical variables", length(clinical_vars)))
+
+# Process each variable type appropriately
 binarized_data <- merged %>%
-  select(sample_barcode, accelerated, all_of(clinical_vars))
+  select(sample, accelerated, all_of(clinical_vars))
 
 for (var in clinical_vars) {
-  binarized_data[[var]] <- binarize_variable(merged[[var]])
+  original <- merged[[var]]
+  before_na <- sum(is.na(original))
+
+  # Determine variable type and apply appropriate binarization function
+  if (var %in% numerical_vars) {
+    transformed <- binarize_numerical(original)
+    var_type <- "numerical"
+  } else if (var %in% categorical_vars) {
+    transformed <- binarize_categorical(original)
+    var_type <- "categorical"
+  } else if (var %in% multicategory_vars) {
+    transformed <- binarize_multicategory(original)
+    var_type <- "multi-category"
+  } else {
+    # Fallback to categorical for unknown types
+    transformed <- binarize_categorical(original)
+    var_type <- "unknown"
+  }
+
+  after_na <- sum(is.na(transformed))
+  introduced <- max(0, after_na - before_na)
+
+  # Log detailed info
+  unique_after <- length(unique(transformed[!is.na(transformed)]))
+  if (introduced > 0 || unique_after < 2) {
+    message(sprintf(
+      "[Info] %s (%s): %d unique values, %d NA added",
+      var, var_type, unique_after, introduced
+    ))
+  }
+
+  binarized_data[[var]] <- transformed
 }
 
 # ============================================================================
 # Statistical tests (Fisher's exact test for binary associations)
 # ============================================================================
 
-test_association <- function(outcome, predictor, outcome_name, predictor_name) {
+test_association <- function(outcome, predictor, outcome_name, predictor_name, var_type = "unknown") {
   # Remove NAs
   complete_idx <- !is.na(outcome) & !is.na(predictor)
 
   if (sum(complete_idx) < 10) {
+    message(sprintf("  Skipped %s: only %d complete cases", predictor_name, sum(complete_idx)))
     return(NULL) # Not enough data
   }
 
@@ -184,13 +292,20 @@ test_association <- function(outcome, predictor, outcome_name, predictor_name) {
 
   # Skip if any dimension is < 2
   if (nrow(tbl) < 2 || ncol(tbl) < 2) {
+    message(sprintf(
+      "  Skipped %s: insufficient variation (dim: %dx%d)",
+      predictor_name, nrow(tbl), ncol(tbl)
+    ))
     return(NULL)
   }
 
   # Fisher's exact test
   test_result <- tryCatch(
     fisher.test(tbl),
-    error = function(e) NULL
+    error = function(e) {
+      message(sprintf("  Error in Fisher test for %s: %s", predictor_name, e$message))
+      NULL
+    }
   )
 
   if (is.null(test_result)) {
@@ -205,7 +320,9 @@ test_association <- function(outcome, predictor, outcome_name, predictor_name) {
 
   return(data.frame(
     clinical_variable = predictor_name,
+    variable_type = var_type,
     n_samples = sum(complete_idx),
+    n_levels = nrow(tbl),
     p_value = test_result$p.value,
     odds_ratio = odds_ratio,
     stringsAsFactors = FALSE
@@ -215,12 +332,25 @@ test_association <- function(outcome, predictor, outcome_name, predictor_name) {
 # Run tests for all clinical variables
 results_list <- list()
 
+message("\nTesting associations...")
 for (var in clinical_vars) {
+  # Determine variable type
+  if (var %in% numerical_vars) {
+    var_type <- "numerical"
+  } else if (var %in% categorical_vars) {
+    var_type <- "categorical"
+  } else if (var %in% multicategory_vars) {
+    var_type <- "multi-category"
+  } else {
+    var_type <- "unknown"
+  }
+
   result <- test_association(
     outcome = binarized_data$accelerated,
     predictor = binarized_data[[var]],
     outcome_name = "accelerated",
-    predictor_name = var
+    predictor_name = var,
+    var_type = var_type
   )
 
   if (!is.null(result)) {
@@ -304,46 +434,86 @@ create_contingency_heatmap <- function(data, var_name) {
 
   # Convert to data frame for ggplot
   df <- as.data.frame(tbl_prop)
-  colnames(df) <- c("Variable", "Acceleration", "Proportion")
+  colnames(df) <- c("BinaryValue", "Acceleration", "Proportion")
 
-  p <- ggplot(df, aes(x = Acceleration, y = Variable, fill = Proportion)) +
+  # Clean variable name for title
+  clean_name <- gsub("^(demographic|diagnoses|exposures)\\.", "", var_name)
+
+  p <- ggplot(df, aes(x = Acceleration, y = BinaryValue, fill = Proportion)) +
     geom_tile(color = "white") +
     geom_text(aes(label = sprintf("%.2f", Proportion)), color = "black") +
     scale_fill_gradient(low = "white", high = "steelblue") +
     labs(
-      title = sprintf("%s vs Age Acceleration", gsub("^(demographic|diagnoses|exposures)\\.", "", var_name)),
+      title = sprintf("%s vs Age Acceleration", clean_name),
       x = "Epigenetic Aging",
-      y = ""
+      y = "Variable Value"
     ) +
     theme_minimal() +
-    theme(axis.text.x = element_text(angle = 0))
+    theme(
+      axis.text.x = element_text(angle = 0),
+      axis.text.y = element_text(size = 10)
+    )
 
   return(p)
 }
 
-# Create heatmaps for top 6 variables
-top_vars <- head(results$clinical_variable, 6)
-heatmap_plots <- list()
+# Create heatmaps for all variables tested
+if (nrow(results) > 0) {
+  # Use all variables from results (sorted by p-value)
+  selected_vars <- results$clinical_variable
+  message(sprintf("Creating heatmaps for all %d tested variables.", length(selected_vars)))
 
-for (var in top_vars) {
-  if (var %in% colnames(binarized_data)) {
-    p <- create_contingency_heatmap(binarized_data, var)
-    if (!is.null(p)) {
-      heatmap_plots[[var]] <- p
+  heatmap_plots <- list()
+  heatmap_files <- c()
+
+  # Save each heatmap as a separate PNG
+  for (i in seq_along(selected_vars)) {
+    var <- selected_vars[i]
+    if (var %in% colnames(binarized_data)) {
+      p <- create_contingency_heatmap(binarized_data, var)
+      if (!is.null(p)) {
+        # Clean variable name for filename
+        clean_var <- gsub("^(demographic|diagnoses|exposures)\\.", "", var)
+        clean_var <- gsub("[^a-zA-Z0-9_]", "_", clean_var)
+
+        filename <- sprintf("results/clinical/%s_%s_contingency_%03d.png", clock_name, clean_var, i)
+        ggsave(filename, plot = p, width = 6, height = 4)
+        heatmap_files <- c(heatmap_files, filename)
+        heatmap_plots[[var]] <- p
+      }
     }
   }
-}
 
-if (length(heatmap_plots) > 0) {
-  combined_heatmaps <- do.call(grid.arrange, c(heatmap_plots, ncol = 2))
+  if (length(heatmap_files) > 0) {
+    message(sprintf("Saved %d individual contingency heatmaps", length(heatmap_files)))
 
-  ggsave(
-    filename = sprintf("results/clinical/%s_contingency_heatmaps.png", clock_name),
-    plot = combined_heatmaps,
-    width = 12,
-    height = 8
-  )
-  message(sprintf("Contingency heatmaps saved to results/clinical/%s_contingency_heatmaps.png", clock_name))
+    # Combine all PNGs into a single page PDF using gridExtra (horizontal layout)
+    pdf(sprintf("results/clinical/%s_contingency_heatmaps.pdf", clock_name), width = 28, height = 20)
+
+    # Calculate grid layout (prefer more columns for horizontal layout)
+    n_plots <- length(heatmap_files)
+    ncol <- ceiling(sqrt(n_plots * 1.4)) # Prefer horizontal layout
+    nrow <- ceiling(n_plots / ncol)
+
+    # Read all images
+    img_list <- lapply(heatmap_files, function(f) {
+      img <- png::readPNG(f)
+      grid::rasterGrob(img, interpolate = TRUE)
+    })
+
+    # Arrange all plots on one page
+    gridExtra::grid.arrange(grobs = img_list, ncol = ncol, nrow = nrow)
+
+    dev.off()
+    message(sprintf(
+      "Combined %d heatmaps into single page: results/clinical/%s_contingency_heatmaps.pdf",
+      n_plots, clock_name
+    ))
+
+    # Optionally clean up individual PNG files
+    # Uncomment the next line if you want to delete individual PNGs after creating PDF
+    # file.remove(heatmap_files)
+  }
 }
 
 # 3. Overall summary heatmap (all variables)

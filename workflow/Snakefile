@@ -14,6 +14,11 @@ PROJECTS = get_projects()
 os.makedirs("logs/clock/gdc_pan", exist_ok=True)
 os.makedirs("logs/gdc", exist_ok=True)
 
+# Final output
+rule all:
+    input:
+        "results/clock/gdc_pan/gdc_pancan_methylclock.pdf"
+
 # Download phenotype, build queries, and fetch GDC data
 rule download_gdc:
     output:
@@ -26,11 +31,6 @@ rule download_gdc:
         "logs/gdc/download.log"
     script:
         "../scripts/download_gdc_pancan.R"
-
-# Final output
-rule all:
-    input:
-        "results/clock/gdc_pan/gdc_pancan_methylclock.pdf"
 
 # Process individual project and generate predictions + plots
 rule process_project:
@@ -74,3 +74,5 @@ rule generate_pdf:
         "logs/clock/gdc_pan/generate_pdf.log"
     script:
         "../scripts/generate_pdf.R"
+
+

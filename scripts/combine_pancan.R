@@ -83,9 +83,6 @@ if (length(prediction_list) == 0) {
 prediction_store <- dplyr::bind_rows(prediction_list)
 message(paste("Combined", nrow(prediction_store), "samples from", length(prediction_list), "projects"))
 
-# Save combined predictions
-saveRDS(prediction_store, "results/clock/gdc_pan/gdc_pancan_predictions.rds")
-
 # Calculate residuals for pancan data
 residuals_list <- list()
 for (clock in colnames(prediction_store)) {
@@ -106,6 +103,8 @@ for (clock in colnames(prediction_store)) {
 # Combine predictions and residuals
 residuals_df <- as.data.frame(residuals_list)
 combined_store <- cbind(prediction_store, residuals_df)
+
+saveRDS(combined_store, "results/clock/gdc_pan/gdc_pancan_predictions.rds")
 
 # Create scatter plots for pancan data
 scatter_plots <- lapply(clock_cols, function(clock) build_clock_scatter(combined_store, clock))
