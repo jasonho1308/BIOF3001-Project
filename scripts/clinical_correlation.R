@@ -87,13 +87,6 @@ message(sprintf("Merged data: %d samples", nrow(merged)))
 # ============================================================================
 
 # Helper function to check if values are numeric strings
-is_numeric_like <- function(vals) {
-  if (!length(vals)) {
-    return(FALSE)
-  }
-  all(grepl("^[-+]?([0-9]*\\.[0-9]+|[0-9]+)$", vals))
-}
-
 # Normalize input by removing placeholder values
 normalize_input <- function(x) {
   x[x %in% c("", "Not Reported", "not reported", "Not Available", "Unknown")] <- NA
