@@ -23,3 +23,4 @@ def get_projects():
     dirs = sorted(set(dirs))
     if dirs:
         return dirs
+    return dirs if dirs else []
