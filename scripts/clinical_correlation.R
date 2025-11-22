@@ -7,6 +7,9 @@ library(tidyr)
 library(ggplot2)
 library(pheatmap)
 library(gridExtra)
+library(png)
+library(grid)
+library(stats)
 
 # Configuration
 args <- commandArgs(trailingOnly = TRUE)
@@ -50,13 +53,20 @@ if (!clock_name %in% colnames(predictions)) {
   ))
 }
 
-# Binarize: accelerated (positive residual) vs decelerated (negative residual)
-predictions$accelerated <- ifelse(predictions[[paste0(clock_name, "_residuals")]] > 0, "Accelerated", "Decelerated")
+# Classify acceleration by quartiles of residuals
+# Q1 (lowest 25%) -> Accelerated, Q4 (highest 25%) -> Decelerated
+# Middle 50% are set to NA and excluded from association tests/plots
+residuals_vec <- predictions[[paste0(clock_name, "_residuals")]]
+qs <- stats::quantile(residuals_vec, probs = c(0.25, 0.75), na.rm = TRUE)
+
+predictions$accelerated <- NA_character_
+predictions$accelerated[!is.na(residuals_vec) & residuals_vec <= qs[1]] <- "Accelerated"
+predictions$accelerated[!is.na(residuals_vec) & residuals_vec >= qs[2]] <- "Decelerated"
 
 predictions$accelerated <- factor(predictions$accelerated, levels = c("Accelerated", "Decelerated"))
 
 message(sprintf(
-  "Age acceleration: %d accelerated, %d decelerated, %d missing",
+  "Age acceleration (quartiles): %d accelerated (Q1), %d decelerated (Q4), %d mid/NA",
   sum(predictions$accelerated == "Accelerated", na.rm = TRUE),
   sum(predictions$accelerated == "Decelerated", na.rm = TRUE),
   sum(is.na(predictions$accelerated))
@@ -80,6 +90,8 @@ merged <- predictions %>%
   select(sample, age, paste0(clock_name, "_residuals"), accelerated, all_of(clock_name)) %>%
   inner_join(pheno, by = "sample")
 
+View(merged)
+
 message(sprintf("Merged data: %d samples", nrow(merged)))
 
 # ============================================================================
@@ -90,7 +102,7 @@ message(sprintf("Merged data: %d samples", nrow(merged)))
 # Normalize input by removing placeholder values
 normalize_input <- function(x) {
   x[x %in% c("", "Not Reported", "not reported", "Not Available", "Unknown")] <- NA
-  return(x)
+  x
 }
 
 # Binarize numerical variables via median split
@@ -101,20 +113,20 @@ binarize_numerical <- function(x) {
 
   # Check if we have enough valid numeric values
   if (sum(!is.na(x_num)) < 2) {
-    return(rep(NA_character_, length(x_chr)))
+    rep(NA_character_, length(x_chr))
   }
 
   # Median split
   med <- median(x_num, na.rm = TRUE)
   result <- ifelse(is.na(x_num), NA, ifelse(x_num > med, "High", "Low"))
-  return(result)
+  result
 }
 
 # Binarize categorical variables (keep all categories as-is)
 binarize_categorical <- function(x) {
   x <- normalize_input(x)
   x_chr <- as.character(x)
-  return(x_chr)
+  x_chr
 }
 
 # Binarize multi-category variables (top category vs Other)
@@ -125,7 +137,7 @@ binarize_multicategory <- function(x) {
 
   # If too few categories, treat as categorical
   if (length(unique_vals) <= 2) {
-    return(binarize_categorical(x))
+    binarize_categorical(x)
   }
 
   # Many categories - keep most frequent, others -> "Other"
@@ -135,7 +147,7 @@ binarize_multicategory <- function(x) {
   result <- ifelse(is.na(x_chr), NA,
     ifelse(x_chr == top_cat, top_cat, "Other")
   )
-  return(result)
+  result
 }
 
 # Categorize clinical variables by type
@@ -182,35 +194,9 @@ multicategory_vars <- c(
   "diagnoses.primary_diagnosis",
   "diagnoses.site_of_resection_or_biopsy",
   "diagnoses.tissue_or_organ_of_origin",
-  "project.project_id",
   "samples.sample_type"
 )
 
-# Exclude non-useful variables (IDs, timestamps, states)
-excluded_vars <- c(
-  "demographic.created_datetime",
-  "demographic.demographic_id",
-  "demographic.state",
-  "demographic.submitter_id",
-  "demographic.updated_datetime",
-  "diagnoses.created_datetime",
-  "diagnoses.diagnosis_id",
-  "diagnoses.state",
-  "diagnoses.submitter_id",
-  "diagnoses.updated_datetime",
-  "exposures.created_datetime",
-  "exposures.exposure_id",
-  "exposures.state",
-  "exposures.submitter_id",
-  "exposures.updated_datetime",
-  "id",
-  "project.name",
-  "tissue_source_site.name",
-  "samples.is_ffpe",
-  "samples.sample_id",
-  "samples.sample_type_id",
-  "samples.tissue_type"
-)
 
 # Combine useful clinical variables
 clinical_vars <- c(numerical_vars, categorical_vars, multicategory_vars)
@@ -282,6 +268,7 @@ test_association <- function(outcome, predictor, outcome_name, predictor_name, v
 
   # Create contingency table
   tbl <- table(predictor, outcome)
+  print(tbl)
 
   # Skip if any dimension is < 2
   if (nrow(tbl) < 2 || ncol(tbl) < 2) {
@@ -415,12 +402,15 @@ if (nrow(results) > 0 && any(!is.na(results$odds_ratio))) {
 }
 
 # 2. Contingency table heatmaps
-create_contingency_heatmap <- function(data, var_name) {
+create_contingency_heatmap <- function(data, var_name, p_value = NULL) {
   tbl <- table(data[[var_name]], data$accelerated)
 
   if (nrow(tbl) < 2 || ncol(tbl) < 2) {
     return(NULL)
   }
+
+  # Calculate total sample count (excluding NAs)
+  n_samples <- sum(!is.na(data[[var_name]]) & !is.na(data$accelerated))
 
   # Convert to proportions (row-wise)
   tbl_prop <- prop.table(tbl, margin = 1)
@@ -432,12 +422,20 @@ create_contingency_heatmap <- function(data, var_name) {
   # Clean variable name for title
   clean_name <- gsub("^(demographic|diagnoses|exposures)\\.", "", var_name)
 
+  # Format p-value and sample count for subtitle
+  subtitle_text <- if (!is.null(p_value)) {
+    sprintf("p = %.3g, N = %d", p_value, n_samples)
+  } else {
+    sprintf("N = %d", n_samples)
+  }
+
   p <- ggplot(df, aes(x = Acceleration, y = BinaryValue, fill = Proportion)) +
     geom_tile(color = "white") +
     geom_text(aes(label = sprintf("%.2f", Proportion)), color = "black") +
-    scale_fill_gradient(low = "white", high = "steelblue") +
+    scale_fill_gradient(low = "white", high = "steelblue", limits = c(0, 1)) +
     labs(
       title = sprintf("%s vs Age Acceleration", clean_name),
+      subtitle = subtitle_text,
       x = "Epigenetic Aging",
       y = "Variable Value"
     ) +
@@ -452,9 +450,10 @@ create_contingency_heatmap <- function(data, var_name) {
 
 # Create heatmaps for all variables tested
 if (nrow(results) > 0) {
-  # Use all variables from results (sorted by p-value)
+  # Sort results by p-value to show most significant first
+  results <- results %>% arrange(p_value)
   selected_vars <- results$clinical_variable
-  message(sprintf("Creating heatmaps for all %d tested variables.", length(selected_vars)))
+  message(sprintf("Creating heatmaps for all %d tested variables (sorted by p-value).", length(selected_vars)))
 
   heatmap_plots <- list()
   heatmap_files <- c()
@@ -463,13 +462,15 @@ if (nrow(results) > 0) {
   for (i in seq_along(selected_vars)) {
     var <- selected_vars[i]
     if (var %in% colnames(binarized_data)) {
-      p <- create_contingency_heatmap(binarized_data, var)
+      # Get p-value for this variable
+      p_val <- results$p_value[results$clinical_variable == var]
+      p <- create_contingency_heatmap(binarized_data, var, p_value = p_val)
       if (!is.null(p)) {
         # Clean variable name for filename
         clean_var <- gsub("^(demographic|diagnoses|exposures)\\.", "", var)
         clean_var <- gsub("[^a-zA-Z0-9_]", "_", clean_var)
 
-        filename <- sprintf("results/clinical/%s_%s_contingency_%03d.png", clock_name, clean_var, i)
+        filename <- sprintf("results/clinical/%s_%s_contingency.png", clock_name, clean_var)
         ggsave(filename, plot = p, width = 6, height = 4)
         heatmap_files <- c(heatmap_files, filename)
         heatmap_plots[[var]] <- p
