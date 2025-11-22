@@ -1,5 +1,3 @@
-
-
 # Setup logging if running via Snakemake
 if (exists("snakemake")) {
   log_file <- file(snakemake@log[[1]], open = "wt")
