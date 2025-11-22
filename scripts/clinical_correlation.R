@@ -90,7 +90,7 @@ merged <- predictions %>%
   select(sample, age, paste0(clock_name, "_residuals"), accelerated, all_of(clock_name)) %>%
   inner_join(pheno, by = "sample")
 
-View(merged)
+if (interactive()) View(merged)
 
 message(sprintf("Merged data: %d samples", nrow(merged)))
 
