@@ -17,7 +17,12 @@ os.makedirs("logs/gdc", exist_ok=True)
 # Final output
 rule all:
     input:
-        "results/clock/gdc_pan/gdc_pancan_methylclock.pdf"
+        "results/clock/gdc_pan/gdc_pancan_methylclock.pdf",
+        # Clinical analysis outputs for Horvath clock
+        "results/clinical/Horvath_clinical_associations.csv",
+        "results/clinical/Horvath_odds_ratio_plot.png",
+        "results/clinical/Horvath_contingency_heatmaps.pdf",
+        "results/clinical/Horvath_pvalue_heatmap.png"
 
 # Download phenotype, build queries, and fetch GDC data
 rule download_gdc:
@@ -74,5 +79,23 @@ rule generate_pdf:
         "logs/clock/gdc_pan/generate_pdf.log"
     script:
         "../scripts/generate_pdf.R"
+
+# Run clinical correlation analysis for a specified clock (default Horvath)
+rule clinical_analysis:
+    input:
+        predictions = "results/clock/gdc_pan/gdc_pancan_predictions.rds",
+        pheno = "data/processed/gdc_pancan/normal_pheno.tsv"
+    output:
+        assoc = "results/clinical/Horvath_clinical_associations.csv",
+        odds = "results/clinical/Horvath_odds_ratio_plot.png",
+        contingency = "results/clinical/Horvath_contingency_heatmaps.pdf",
+        pheat = "results/clinical/Horvath_pvalue_heatmap.png"
+    params:
+        clock = "Horvath"
+    log:
+        "logs/clock/gdc_pan/clinical_analysis.log"
+    shell:
+        # Pass clock as argument; script creates required output directory
+        "Rscript scripts/clinical_correlation.R {params.clock} &> {log}"
 
 
