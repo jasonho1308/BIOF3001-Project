@@ -1,6 +1,6 @@
 #!/usr/bin/env Rscript
 # Simplified script for classifying and counting samples based on global epigenetic aging
-# for specific tissues (TCGA-BRCA and TCGA-KIRC)
+# for specific tissues (LIHC)
 
 library(dplyr)
 
@@ -37,7 +37,7 @@ predictions$acceleration_status[!is.na(residuals_vec) & residuals_vec > qs[2]] <
 
 # Filter for specific tissues AFTER classification
 predictions_filtered <- predictions %>%
-    filter(project %in% c("TCGA-BRCA", "TCGA-KIRC"))
+    filter(project %in% c("TCGA-LIHC"))
 
 # Count the samples for each tissue type
 results <- predictions_filtered %>%

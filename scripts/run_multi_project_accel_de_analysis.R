@@ -1,16 +1,32 @@
 #!/usr/bin/env Rscript
-# Orchestrates two differential-expression analyses:
-# 1) TCGA-LIHC samples classified globally and balanced between acceleration groups.
-# 2) TCGA-BRCA and TCGA-KIRC samples classified within each tissue separately.
+# Title: Multi-project orchestration of acceleration-based differential analyses
+# Description: Coordinates data selection, balanced sampling, count retrieval, and
+#   downstream DESeq2 comparisons for multiple TCGA cohorts. LIHC samples are
+#   classified using global Horvath residual quantiles and down-sampled to balance
+#   acceleration states, whereas BRCA and KIRC cohorts are stratified by within-
+#   tissue quartiles. Each case exports the barcodes used, downloads STAR counts
+#   (or alternate workflows if overridden), saves ±1 classification RDS files, and
+#   invokes run_accel_de_analysis.R to compute differential expression metrics.
+# Usage:
+#   Rscript run_multi_project_accel_de_analysis.R [--key=value overrides]
+# Key parameters (defaults shown in params list):
+#   predictions_path, clock_residual_col, lower_quantile/upper_quantile,
+#   project codes, workflow/sample-code overrides, output directories.
+# Outputs:
+#   Per-project barcode lists, count matrices, metadata tables, classification
+#   RDS files (results/clock/derived), and DE result artifacts under
+#   results/differential_analysis/.
 
 suppressPackageStartupMessages({
   library(data.table)
   library(TCGAbiolinks)
 })
 
-acceleration_status <- project <- residual_value <- global_status <- id <- NULL
+# data.table NSE bindings
+utils::globalVariables(c("acceleration_status", "project", "residual_value", "global_status", "id", "sample_short"))
 
 get_script_path <- function() {
+  # Resolves script directory regardless of invocation context (Rscript vs source)
   cmd_args <- commandArgs(trailingOnly = FALSE)
   file_flag <- "--file="
   file_arg <- cmd_args[startsWith(cmd_args, file_flag)]
@@ -25,6 +41,7 @@ repo_root <- normalizePath(file.path(script_dir, ".."))
 get_counts_script <- file.path(repo_root, "scripts", "get_brca_rnaseq_by_barcode.R")
 de_script <- file.path(repo_root, "scripts", "run_accel_de_analysis.R")
 
+# 1) Default configuration values (override via --key=value)
 params <- list(
   predictions_path = file.path(repo_root, "results", "clock", "gdc_pan", "gdc_pancan_predictions.rds"),
   clock_residual_col = "Horvath_residuals",
@@ -37,7 +54,7 @@ params <- list(
   output_dir = file.path(repo_root, "results", "differential_analysis"),
   classification_dir = file.path(repo_root, "results", "clock", "derived"),
   chunk_size = 50L,
-  default_workflow = "STAR - Counts",
+  default_workflow = "STAR - Counts", # can be overridden per-project when alternate pipelines exist
   workflow_overrides = list(),
   default_sample_codes = c("01"),
   sample_code_overrides = list(
@@ -48,6 +65,7 @@ params <- list(
 )
 
 override_params <- function(arg_vec, defaults) {
+  # 2) Lightweight CLI override system: accepts --key=value pairs mapped onto params list
   if (!length(arg_vec)) return(defaults)
   for (arg in arg_vec) {
     if (!startsWith(arg, "--") || !grepl("=", arg)) next
@@ -69,6 +87,7 @@ override_params <- function(arg_vec, defaults) {
 }
 
 assign_status_vector <- function(values, lower, upper) {
+  # 3) Label samples in lower quantile as Accelerated and upper quantile as Decelerated
   status <- rep(NA_character_, length(values))
   ok <- !is.na(values)
   if (!any(ok)) return(status)
@@ -79,6 +98,7 @@ assign_status_vector <- function(values, lower, upper) {
 }
 
 balance_status_groups <- function(dt, seed) {
+  # 4) Randomly subsample each group to the same size so DESeq2 design remains balanced
   status_counts <- table(dt$acceleration_status)
   if (length(status_counts) < 2) {
     stop(sprintf(
@@ -100,11 +120,13 @@ balance_status_groups <- function(dt, seed) {
 }
 
 write_vector_file <- function(values, path) {
+  # 5) Persist selected barcodes for inspection / downstream scripts
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   writeLines(values, con = path)
 }
 
 create_classification_rds <- function(ids, statuses, path) {
+  # Encodes Accelerated as +1 and Decelerated as -1 for downstream scripts
   dir.create(dirname(path), recursive = TRUE, showWarnings = FALSE)
   table <- data.table(
     id = ids,
@@ -114,6 +136,7 @@ create_classification_rds <- function(ids, statuses, path) {
 }
 
 subset_sample_types <- function(dt, allowed_codes) {
+  # Filters TCGA barcodes by sample-type codes (e.g., 01 = primary tumor)
   if (!nrow(dt)) return(dt)
   dt[substr(dt$id, 14, 15) %in% allowed_codes]
 }
@@ -135,6 +158,7 @@ make_paths <- function(label, params) {
 }
 
 run_script <- function(script_path, args) {
+  # Wrapper to fail-fast if any subordinate Rscript invocation errors out
   status <- system2("Rscript", args = c(script_path, args))
   if (!identical(status, 0L)) {
     stop(sprintf("Command failed for %s", script_path))
@@ -151,6 +175,7 @@ resolve_workflow <- function(project_code, cfg) {
 available_cache <- new.env(parent = emptyenv())
 
 fetch_available_samples <- function(project_code, workflow_type) {
+  # 6) Cache GDC availability to avoid repeated queries when enforcing workflow coverage
   key <- sprintf("%s::%s", project_code, workflow_type)
   if (exists(key, envir = available_cache, inherits = FALSE)) {
     return(get(key, envir = available_cache, inherits = FALSE))
@@ -173,6 +198,7 @@ fetch_available_samples <- function(project_code, workflow_type) {
 }
 
 intersect_with_available_samples <- function(case_dt, project_code, workflow_type) {
+  # Remove samples that lack a downloaded STAR-counts entry to stop downstream failures
   if (!nrow(case_dt)) return(case_dt)
   available_ids <- fetch_available_samples(project_code, workflow_type)
   filtered_dt <- data.table::copy(case_dt)
@@ -200,6 +226,7 @@ intersect_with_available_samples <- function(case_dt, project_code, workflow_typ
 }
 
 run_case <- function(case_dt, label, project_code, params, workflow_type) {
+  # 7) End-to-end pipeline for one cohort: save IDs, download counts, run DESeq2 wrapper
   if (!nrow(case_dt)) {
     stop(sprintf("No samples available for %s", label))
   }
@@ -228,11 +255,12 @@ run_case <- function(case_dt, label, project_code, params, workflow_type) {
 }
 
 execute_workflow <- function(arg_vec = commandArgs(trailingOnly = TRUE)) {
+  # 8) Main orchestration entrypoint
   cfg <- override_params(arg_vec, params)
   if (!file.exists(cfg$predictions_path)) {
     stop(sprintf("Predictions file not found: %s", cfg$predictions_path))
   }
-  dt <- as.data.table(readRDS(cfg$predictions_path))
+  dt <- as.data.table(readRDS(cfg$predictions_path)) # master table with Horvath residuals for every TCGA project
   if (!cfg$clock_residual_col %in% names(dt)) {
     stop(sprintf("Residual column '%s' missing in predictions", cfg$clock_residual_col))
   }
@@ -240,13 +268,13 @@ execute_workflow <- function(arg_vec = commandArgs(trailingOnly = TRUE)) {
   dt$residual_value <- dt[[cfg$clock_residual_col]]
   dt$global_status <- assign_status_vector(dt$residual_value, cfg$lower_quantile, cfg$upper_quantile)
 
-  # LIHC global balanced case
+  # 9) LIHC global balanced case: use cohort-wide quantiles and enforce equal group sizes
   lihc_idx <- dt$project == cfg$lihc_project & !is.na(dt$global_status)
   lihc_dt <- dt[lihc_idx, c("id", "global_status"), with = FALSE]
   if (!nrow(lihc_dt)) {
     stop("No LIHC samples available after global classification.")
   }
-  data.table::setnames(lihc_dt, "global_status", "acceleration_status")
+  data.table::setnames(lihc_dt, "global_status", "acceleration_status") # reuse downstream helpers that expect this column name
   lihc_dt <- subset_sample_types(lihc_dt, resolve_sample_codes(cfg$lihc_project, cfg))
   if (!nrow(lihc_dt)) {
     stop("No LIHC samples available after filtering to primary tumor codes.")
@@ -262,7 +290,7 @@ execute_workflow <- function(arg_vec = commandArgs(trailingOnly = TRUE)) {
     lihc_workflow
   )
 
-  # BRCA per tissue
+  # 10) BRCA per tissue: quartile classification done within project-specific residuals
   brca_idx <- dt$project == cfg$brca_project & !is.na(dt$residual_value)
   brca_dt <- dt[brca_idx, c("id", "residual_value"), with = FALSE]
   brca_dt$acceleration_status <- assign_status_vector(brca_dt$residual_value, cfg$lower_quantile, cfg$upper_quantile)
@@ -281,7 +309,7 @@ execute_workflow <- function(arg_vec = commandArgs(trailingOnly = TRUE)) {
     brca_workflow
   )
 
-  # KIRC per tissue
+  # 11) KIRC per tissue: mirrors BRCA workflow but typically has fewer samples
   kirc_idx <- dt$project == cfg$kirc_project & !is.na(dt$residual_value)
   kirc_dt <- dt[kirc_idx, c("id", "residual_value"), with = FALSE]
   kirc_dt$acceleration_status <- assign_status_vector(kirc_dt$residual_value, cfg$lower_quantile, cfg$upper_quantile)
