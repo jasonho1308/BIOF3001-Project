@@ -27,11 +27,30 @@ lfc_cutoff <- if (length(args) >= 7) as.numeric(args[[7]]) else 1.0
 
 shorten_barcode <- function(x) substr(x, 1, 16)
 
+derive_status <- function(values) {
+  vals <- values
+  if (is.factor(vals)) vals <- as.character(vals)
+  if (is.character(vals)) {
+    trimmed <- trimws(vals)
+    unique_vals <- unique(trimmed)
+    if (length(unique_vals) && all(unique_vals %in% c("Accelerated", "Decelerated"))) {
+      status <- trimmed
+      return(factor(status, levels = c("Decelerated", "Accelerated")))
+    }
+  }
+  if (is.numeric(vals)) {
+    unique_vals <- unique(na.omit(vals))
+    if (length(unique_vals) && all(unique_vals %in% c(-1, 1))) {
+      status <- ifelse(vals > 0, "Accelerated", "Decelerated")
+      return(factor(status, levels = c("Decelerated", "Accelerated")))
+    }
+  }
+  status <- ifelse(vals >= 0, "Accelerated", "Decelerated")
+  factor(status, levels = c("Decelerated", "Accelerated"))
+}
+
 if (!file.exists(counts_path)) stop(sprintf("Counts file not found: %s", counts_path))
 if (!file.exists(clock_path)) stop(sprintf("Clock file not found: %s", clock_path))
-
-dir.create(output_dir, recursive = TRUE, showWarnings = FALSE)
-
 message("Reading counts matrix …")
 counts_dt <- data.table::fread(counts_path)
 if (!"gene_id" %in% names(counts_dt)) stop("Counts file must contain a 'gene_id' column.")
@@ -70,8 +89,7 @@ col_data <- data.frame(
   sample_short = merged_map$sample_short,
   clock_value = merged_map$clock_value
 )
-col_data$Type <- ifelse(col_data$clock_value >= 0, "Accelerated", "Decelerated")
-col_data$Type <- factor(col_data$Type, levels = c("Decelerated", "Accelerated"))
+col_data$Type <- derive_status(col_data$clock_value)
 
 col_data <- col_data[!is.na(col_data$Type), , drop = FALSE]
 count_mat <- count_mat[, rownames(col_data), drop = FALSE]
