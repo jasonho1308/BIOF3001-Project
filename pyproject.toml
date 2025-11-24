@@ -8,6 +8,7 @@ dependencies = [
     "dvc>=3.63.0",
     "dvc-ssh>=4.2.2",
     "dvc-webdav>=3.0.0",
+    "snakemake>=9.13.7",
 ]
 
 [dependency-groups]

@@ -1,0 +1,78 @@
+# Snakemake workflow for epigenetic clock analysis
+# This workflow processes TCGA projects independently to avoid reprocessing all clocks
+
+import os
+import csv
+import glob
+from snakemake.io import directory
+
+include: "rules/get_project.smk"
+
+# Get all TCGA projects from the queries file
+PROJECTS = get_projects()
+
+os.makedirs("logs/clock/gdc_pan", exist_ok=True)
+os.makedirs("logs/gdc", exist_ok=True)
+
+# Final output
+rule all:
+    input:
+        "results/clock/gdc_pan/gdc_pancan_methylclock.pdf"
+
+# Download phenotype, build queries, and fetch GDC data
+rule download_gdc:
+    output:
+        pheno = "data/processed/gdc_pancan/normal_pheno.tsv",
+        counts = "data/processed/gdc_pancan/normal_counts_by_project.csv",
+        queries = "data/processed/gdc_pancan/queries.rds",
+        missing = "data/processed/gdc_pancan/missing_ids.rds",
+        gdcdata = directory("data/raw/GDCdata")
+    log:
+        "logs/gdc/download.log"
+    script:
+        "../scripts/download_gdc_pancan.R"
+
+# Process individual project and generate predictions + plots
+rule process_project:
+    input:
+        queries = "data/processed/gdc_pancan/queries.rds",
+        data = "data/raw/GDCdata/"
+    output:
+        scatter = "results/clock/gdc_pan/{project}_scatterplots.png",
+        residuals = "results/clock/gdc_pan/{project}_residuals_boxplots.png",
+        predictions = "results/clock/gdc_pan/{project}_predictions.rds"
+    params:
+        project = "{project}"
+    log:
+        "logs/clock/gdc_pan/{project}.log"
+    script:
+        "../scripts/process_project.R"
+
+# Combine all project predictions and generate pancan-wide analysis
+rule combine_pancan:
+    input:
+        predictions = expand("results/clock/gdc_pan/{project}_predictions.rds", project=PROJECTS)
+    output:
+        scatter = "results/clock/gdc_pan/gdc_pancan_scatterplots.png",
+        residuals = "results/clock/gdc_pan/gdc_pancan_residuals_boxplots.png",
+        combined = "results/clock/gdc_pan/gdc_pancan_predictions.rds"
+    log:
+        "logs/clock/gdc_pan/pancan.log"
+    script:
+        "../scripts/combine_pancan.R"
+
+# Generate final PDF combining all plots
+rule generate_pdf:
+    input:
+        scatter_plots = expand("results/clock/gdc_pan/{project}_scatterplots.png", project=PROJECTS),
+        residual_plots = expand("results/clock/gdc_pan/{project}_residuals_boxplots.png", project=PROJECTS),
+        pancan_scatter = "results/clock/gdc_pan/gdc_pancan_scatterplots.png",
+        pancan_residuals = "results/clock/gdc_pan/gdc_pancan_residuals_boxplots.png"
+    output:
+        "results/clock/gdc_pan/gdc_pancan_methylclock.pdf"
+    log:
+        "logs/clock/gdc_pan/generate_pdf.log"
+    script:
+        "../scripts/generate_pdf.R"
+
+

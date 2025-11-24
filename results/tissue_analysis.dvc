@@ -1,0 +1,6 @@
+outs:
+- md5: f3c497e49cd214bf45d873a2ed053205.dir
+  size: 753168
+  nfiles: 8
+  hash: md5
+  path: tissue_analysis
