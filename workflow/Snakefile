@@ -30,7 +30,7 @@ rule download_gdc:
         counts = "data/processed/gdc_pancan/normal_counts_by_project.csv",
         queries = "data/processed/gdc_pancan/queries.rds",
         missing = "data/processed/gdc_pancan/missing_ids.rds",
-        gdcdata = directory("data/raw/GDCdata")
+        # gdcdata = directory("data/raw/GDCdata") intentionally omitted to avoid re-downloading
     log:
         "logs/gdc/download.log"
     script:
