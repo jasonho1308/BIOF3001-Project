@@ -2,6 +2,16 @@
 # Clinical correlation analysis for accelerated/decelerated epigenetic aging
 # Treats all variables as binary (yes/no) and computes associations
 
+if (exists("snakemake")) {
+  # Redirect output to log file
+  log_file <- snakemake@log[[1]]
+  con <- file(log_file, open = "wt")
+  sink(con, type = "output")
+  sink(con, type = "message")
+  message("Logging to ", log_file)
+}
+
+
 library(dplyr)
 library(tidyr)
 library(ggplot2)
@@ -559,3 +569,11 @@ if (nrow(results) > 0) {
 }
 
 message("\n=== Analysis complete! ===")
+
+
+# Close log sinks if applicable
+if (exists("snakemake")) {
+  sink(type = "output")
+  sink(type = "message")
+  close(con)
+}
