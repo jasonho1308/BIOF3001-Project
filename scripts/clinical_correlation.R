@@ -2,6 +2,16 @@
 # Clinical correlation analysis for accelerated/decelerated epigenetic aging
 # Treats all variables as binary (yes/no) and computes associations
 
+if (exists("snakemake")) {
+  # Redirect output to log file
+  log_file <- snakemake@log[[1]]
+  con <- file(log_file, open = "wt")
+  sink(con, type = "output")
+  sink(con, type = "message")
+  message("Logging to ", log_file)
+}
+
+
 library(dplyr)
 library(tidyr)
 library(ggplot2)
@@ -94,6 +104,16 @@ if (interactive()) View(merged)
 
 message(sprintf("Merged data: %d samples", nrow(merged)))
 
+# Derive a binary obesity flag from BMI > 30
+if ("exposures.bmi" %in% colnames(merged)) {
+  bmi_values <- suppressWarnings(as.numeric(merged[["exposures.bmi"]]))
+  merged$exposures.obesity <- ifelse(is.na(bmi_values), NA_character_,
+    ifelse(bmi_values > 30, "Obese", "Not Obese")
+  )
+} else {
+  merged$exposures.obesity <- NA_character_
+}
+
 # ============================================================================
 # Binarize clinical variables
 # ============================================================================
@@ -162,7 +182,6 @@ numerical_vars <- c(
   "diagnoses.days_to_diagnosis",
   "diagnoses.days_to_last_follow_up",
   "diagnoses.year_of_diagnosis",
-  "exposures.bmi",
   "exposures.cigarettes_per_day",
   "exposures.height",
   "exposures.pack_years_smoked",
@@ -182,7 +201,8 @@ categorical_vars <- c(
   "diagnoses.synchronous_malignancy",
   "diagnoses.tumor_grade",
   "diagnoses.tumor_stage",
-  "exposures.alcohol_history"
+  "exposures.alcohol_history",
+  "exposures.obesity"
 )
 
 # Multi-category variables (diagnosis codes, tissue types, etc.)
@@ -412,12 +432,17 @@ create_contingency_heatmap <- function(data, var_name, p_value = NULL) {
   # Calculate total sample count (excluding NAs)
   n_samples <- sum(!is.na(data[[var_name]]) & !is.na(data$accelerated))
 
-  # Convert to proportions (row-wise)
-  tbl_prop <- prop.table(tbl, margin = 1)
-
-  # Convert to data frame for ggplot
-  df <- as.data.frame(tbl_prop)
-  colnames(df) <- c("BinaryValue", "Acceleration", "Proportion")
+  # Convert to data frame so we can report counts and percentages
+  df <- as.data.frame(tbl)
+  colnames(df) <- c("BinaryValue", "Acceleration", "Count")
+  df$BinaryValue <- as.character(df$BinaryValue)
+  df$Acceleration <- as.character(df$Acceleration)
+  row_totals <- rowSums(tbl)
+  df$row_total <- row_totals[df$BinaryValue]
+  df$Proportion <- ifelse(df$row_total == 0, NA, df$Count / df$row_total)
+  percent_values <- ifelse(is.na(df$Proportion), 0, df$Proportion * 100)
+  df$Label <- sprintf("%d (%.1f%%)", df$Count, percent_values)
+  df$row_total <- NULL
 
   # Clean variable name for title
   clean_name <- gsub("^(demographic|diagnoses|exposures)\\.", "", var_name)
@@ -431,7 +456,7 @@ create_contingency_heatmap <- function(data, var_name, p_value = NULL) {
 
   p <- ggplot(df, aes(x = Acceleration, y = BinaryValue, fill = Proportion)) +
     geom_tile(color = "white") +
-    geom_text(aes(label = sprintf("%.2f", Proportion)), color = "black") +
+    geom_text(aes(label = Label), color = "black") +
     scale_fill_gradient(low = "white", high = "steelblue", limits = c(0, 1)) +
     labs(
       title = sprintf("%s vs Age Acceleration", clean_name),
@@ -544,3 +569,11 @@ if (nrow(results) > 0) {
 }
 
 message("\n=== Analysis complete! ===")
+
+
+# Close log sinks if applicable
+if (exists("snakemake")) {
+  sink(type = "output")
+  sink(type = "message")
+  close(con)
+}

@@ -17,7 +17,11 @@ os.makedirs("logs/gdc", exist_ok=True)
 # Final output
 rule all:
     input:
-        "results/clock/gdc_pan/gdc_pancan_methylclock.pdf"
+        "results/clock/gdc_pan/gdc_pancan_methylclock.pdf",
+        "results/clinical/Horvath_clinical_associations.csv",
+        "results/clinical/Horvath_odds_ratio_plot.png",
+        "results/clinical/Horvath_contingency_heatmaps.pdf",
+        "results/clinical/Horvath_pvalue_heatmap.png"
 
 # Download phenotype, build queries, and fetch GDC data
 rule download_gdc:
@@ -26,11 +30,11 @@ rule download_gdc:
         counts = "data/processed/gdc_pancan/normal_counts_by_project.csv",
         queries = "data/processed/gdc_pancan/queries.rds",
         missing = "data/processed/gdc_pancan/missing_ids.rds",
-        gdcdata = directory("data/raw/GDCdata")
+        # gdcdata = directory("data/raw/GDCdata") intentionally omitted to avoid re-downloading
     log:
         "logs/gdc/download.log"
     script:
-        "../scripts/download_gdc_pancan.R"
+        "../scripts/clock/download_gdc_pancan.R"
 
 # Process individual project and generate predictions + plots
 rule process_project:
@@ -46,7 +50,7 @@ rule process_project:
     log:
         "logs/clock/gdc_pan/{project}.log"
     script:
-        "../scripts/process_project.R"
+        "../scripts/clock/process_project.R"
 
 # Combine all project predictions and generate pancan-wide analysis
 rule combine_pancan:
@@ -59,7 +63,7 @@ rule combine_pancan:
     log:
         "logs/clock/gdc_pan/pancan.log"
     script:
-        "../scripts/combine_pancan.R"
+        "../scripts/clock/combine_pancan.R"
 
 # Generate final PDF combining all plots
 rule generate_pdf:
@@ -73,6 +77,23 @@ rule generate_pdf:
     log:
         "logs/clock/gdc_pan/generate_pdf.log"
     script:
-        "../scripts/generate_pdf.R"
+        "../scripts/clock/generate_pdf.R"
+
+# Run clinical correlation analysis for a specified clock (default Horvath)
+rule clinical_analysis:
+    input:
+        predictions = "results/clock/gdc_pan/gdc_pancan_predictions.rds",
+        pheno = "data/processed/gdc_pancan/normal_pheno.tsv"
+    output:
+        assoc = "results/clinical/Horvath_clinical_associations.csv",
+        odds = "results/clinical/Horvath_odds_ratio_plot.png",
+        contingency = "results/clinical/Horvath_contingency_heatmaps.pdf",
+        pheat = "results/clinical/Horvath_pvalue_heatmap.png"
+    params:
+        clock = "Horvath"
+    log:
+        "logs/clock/gdc_pan/clinical_analysis.log"
+    shell:
+        "Rscript scripts/clinical_correlation.R {params.clock} &> {log}"
 
 

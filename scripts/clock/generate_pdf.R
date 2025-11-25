@@ -1,5 +1,4 @@
-#!/usr/bin/env Rscript
-# Generate final PDF combining all plots
+# Generate final PDF combining all plots for epigenetic clock analysis of GDC-PANCAN data
 
 # Setup logging if running via Snakemake
 if (exists("snakemake")) {

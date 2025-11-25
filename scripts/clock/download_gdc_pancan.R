@@ -1,3 +1,6 @@
+# To download GDC-PANCAN phenotype data from UCSC Xena and
+# then download DNA Methylation Beta Value data for normal tissue samples from GDC.
+
 # Setup logging if running via Snakemake
 if (exists("snakemake")) {
   log_file <- file(snakemake@log[[1]], open = "wt")
@@ -8,6 +11,7 @@ if (exists("snakemake")) {
 library(UCSCXenaTools)
 library(dplyr)
 library(TCGAbiolinks)
+library(parallel)
 
 # Generate phenotype query
 xe_pheno <- XenaGenerate(subset = XenaHostNames == "gdcHub") %>%
@@ -53,15 +57,26 @@ write.csv(as.data.frame(sample_counts),
   quote = FALSE
 )
 
-gdc_queries <- list()
-missing_ids <- list()
-for (proj in names(normal_samples_by_project)) {
-  ids <- unlist(normal_samples_by_project[[proj]]["sample"])
+# Detect number of cores (use half to avoid overwhelming the system)
+n_cores <- max(1, floor(detectCores() / 2))
+message(sprintf("Using %d cores for parallel processing", n_cores))
+
+# Function to process a single project
+process_project <- function(proj, samples_by_project) {
+  ids <- unlist(samples_by_project[[proj]]["sample"])
+
+  result <- list(
+    project = proj,
+    query = NULL,
+    missing_ids = NULL,
+    success = FALSE
+  )
+
   tryCatch(
     {
-      print(paste("Processing project:", proj))
+      message(paste("Processing project:", proj))
 
-      # Construct GDC query for DNA Methylation Beta Value data for the given project and sample barcodes
+      # Construct GDC query for DNA Methylation Beta Value data
       query_TCGA_meth <- GDCquery(
         project       = proj,
         data.category = "DNA Methylation",
@@ -69,22 +84,56 @@ for (proj in names(normal_samples_by_project)) {
         barcode       = ids
       )
 
-      gdc_queries[[proj]] <- query_TCGA_meth
+      result$query <- query_TCGA_meth
 
-      # To download the actual data files from the GDC based on the previously constructed query:
+      # Download data files from GDC
       # files.per.chunk = 20 to avoid timeout issues
       GDCdownload(query_TCGA_meth, directory = "data/raw/GDCdata", files.per.chunk = 20)
-      print(paste("Downloaded data for project:", proj))
+      message(paste("Downloaded data for project:", proj))
+
+      result$success <- TRUE
     },
     error = function(e) {
       message(paste("Error processing project:", proj))
       message(e)
-
-      # save all missing ids to a list, for logging by project
-      # <<- to modify the variable outside the function scope
-      missing_ids[[proj]] <<- ids
+      
+      # used <<- to assign to outer scope
+      result$missing_ids <<- ids
     }
   )
+
+  result
+}
+
+# Process projects in parallel
+# mc.preschedule = FALSE ensures each job completes independently
+results <- mclapply(
+  names(normal_samples_by_project),
+  process_project,
+  samples_by_project = normal_samples_by_project,
+  mc.cores = n_cores,
+  mc.preschedule = FALSE
+)
+
+# Collect queries and missing IDs from results
+gdc_queries <- list()
+missing_ids <- list()
+
+for (result in results) {
+  # Skip if result is an error or NULL
+  if (inherits(result, "try-error") || is.null(result)) {
+    next
+  }
+
+  # Check if result is a list with expected structure
+  if (is.list(result) && !is.null(result$project)) {
+    if (!is.null(result$query)) {
+      gdc_queries[[result$project]] <- result$query
+    }
+    if (!is.null(result$missing_ids)) {
+      missing_ids[[result$project]] <- result$missing_ids
+    }
+  }
 }
 
 # save missing ids, gdc queries to processed data
