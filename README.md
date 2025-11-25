@@ -20,7 +20,7 @@ Run `library.R` to download all required libraries for R
 
 Run `uv sync` to install all required libraries for python
 
-For data management, we have used [dvc](https://dvc.org/) to store and share our data, please contact Jason Ho for the server address.
+For data management, we have used [dvc](https://dvc.org/) to store and share our raw and processed data, please contact Jason Ho for the server address. (just the raw data account for 1XGB, it takes at least 3 hours to download)
 
 For workflow, we have used [snakemake](https://snakemake.readthedocs.io/en/stable/) to ensure reproducible results.
 
@@ -65,3 +65,33 @@ The workflow consists of the following steps:
 - `results/clinical/*`: Heat map for clinical correlation
 
 > some `*.rds` was saved to prevent excess api usage and avoid recomputing of variables
+
+## Big Data Approach
+
+This project implements several big data strategies to efficiently handle large-scale genomic data from TCGA (The Cancer Genome Atlas):
+
+### Data Management
+
+- **DVC (Data Version Control)**: Large raw data files (`.dvc` files) are tracked separately from the git repository, enabling efficient versioning and sharing of multi-gigabyte methylation datasets without bloating the repository
+- **Selective Processing**: Only normal tissue samples are extracted from the full TCGA-PANCAN dataset, reducing computational overhead
+- **Cached Intermediate Results**: Key data structures (`.rds` files) are saved to prevent redundant API calls and expensive recomputations
+
+### Parallel Processing
+
+- **Snakemake Workflow**: Orchestrates parallel execution across 24 TCGA projects, automatically managing dependencies and utilizing multiple CPU cores
+- **Multi-core Downloads**: The `download_gdc_pancan.R` script uses R's `parallel::mclapply()` to download data from multiple projects concurrently, significantly reducing wall-clock time
+- **Project-level Parallelism**: Each TCGA project is processed independently, allowing Snakemake to distribute work across available cores without waiting for sequential completion
+- **Adaptive Core Usage**: Scripts automatically detect available CPU cores and use half to balance performance with system stability
+
+### Scalability Features
+
+- **Incremental Execution**: Snakemake tracks which outputs exist and only reprocesses missing or outdated files, enabling efficient iterative development
+- **Chunk-based Downloads**: GDC downloads use `files.per.chunk = 20` to prevent timeout issues when fetching large batches of methylation files
+- **Memory-efficient Processing**: Data is processed project-by-project rather than loading the entire pan-cancer dataset into memory at once
+- **Error Recovery**: Parallel processing includes robust error handling to continue processing remaining projects even if individual projects fail
+
+### Performance Optimization
+
+- **Binary Serialization**: R's `.rds` format provides fast, compressed storage for intermediate results
+- **Lazy Evaluation**: Phenotype and methylation data are only loaded when needed for specific analyses
+- **Distributed I/O**: Multiple projects write to separate output files simultaneously, avoiding I/O bottlenecks
