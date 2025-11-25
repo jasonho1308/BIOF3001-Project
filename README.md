@@ -8,7 +8,7 @@ Investigating the molecular basis of accelerated epigenetic aging
 | --- | --- |
 | Jason | - the download of GDC-PANCAN data <br> - initial clock scripts, fix plot <br> - clinical correlation analysis <br> - snakemake, parallel processing and dvc implementation | 
 | Jacob | - plot boxplots and scatterplots for different epigenetic clocks <br> - fix some projects having multiple platforms causing error when running clock <br> - other error fixes|
-| William | - classify samples into accelerated and decelerated aging <br> - differential expression analysis <br> - pathway analysis <br> |
+| William | - classify samples into accelerated and decelerated aging <br> - download corresponding rna sequence data <br> - differential expression analysis <br> - pathway analysis <br> |
 
 ## Running the Analysis
 
