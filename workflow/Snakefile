@@ -55,6 +55,7 @@ rule process_project:
 # Combine all project predictions and generate pancan-wide analysis
 rule combine_pancan:
     input:
+        queries = "data/processed/gdc_pancan/queries.rds",
         predictions = expand("results/clock/gdc_pan/{project}_predictions.rds", project=PROJECTS)
     output:
         scatter = "results/clock/gdc_pan/gdc_pancan_scatterplots.png",

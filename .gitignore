@@ -1,5 +1,10 @@
 df.rds
 results.rds
+
+# Keep notebooks local; do not commit ipynb files
+*.ipynb
+# Stop tracking this analysis notebook (kept locally)
+scripts/analysis_GEO.ipynb
 .snakemake
 *.log
 

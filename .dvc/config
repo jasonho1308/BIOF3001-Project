@@ -1,4 +1,7 @@
 [core]
-    remote = store
+    remote = webdav
 ['remote "store"']
     url = ssh://user@hpc02.sbms.hku.hk:22/home/hchjason/shared/dvcstore/
+['remote "webdav"']
+    url = webdavs://legocity.synology.me:5006/git_repos/shared/biof3001/dvcstore
+    user = biof3001
