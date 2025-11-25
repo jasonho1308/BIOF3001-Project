@@ -1,3 +1,6 @@
+# To download GDC-PANCAN phenotype data from UCSC Xena and
+# then download DNA Methylation Beta Value data for normal tissue samples from GDC.
+
 # Setup logging if running via Snakemake
 if (exists("snakemake")) {
   log_file <- file(snakemake@log[[1]], open = "wt")

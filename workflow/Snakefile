@@ -18,7 +18,6 @@ os.makedirs("logs/gdc", exist_ok=True)
 rule all:
     input:
         "results/clock/gdc_pan/gdc_pancan_methylclock.pdf",
-        # Clinical analysis outputs for Horvath clock
         "results/clinical/Horvath_clinical_associations.csv",
         "results/clinical/Horvath_odds_ratio_plot.png",
         "results/clinical/Horvath_contingency_heatmaps.pdf",
@@ -35,7 +34,7 @@ rule download_gdc:
     log:
         "logs/gdc/download.log"
     script:
-        "../scripts/download_gdc_pancan.R"
+        "../scripts/clock/download_gdc_pancan.R"
 
 # Process individual project and generate predictions + plots
 rule process_project:
@@ -51,7 +50,7 @@ rule process_project:
     log:
         "logs/clock/gdc_pan/{project}.log"
     script:
-        "../scripts/process_project.R"
+        "../scripts/clock/process_project.R"
 
 # Combine all project predictions and generate pancan-wide analysis
 rule combine_pancan:
@@ -64,7 +63,7 @@ rule combine_pancan:
     log:
         "logs/clock/gdc_pan/pancan.log"
     script:
-        "../scripts/combine_pancan.R"
+        "../scripts/clock/combine_pancan.R"
 
 # Generate final PDF combining all plots
 rule generate_pdf:
@@ -78,7 +77,7 @@ rule generate_pdf:
     log:
         "logs/clock/gdc_pan/generate_pdf.log"
     script:
-        "../scripts/generate_pdf.R"
+        "../scripts/clock/generate_pdf.R"
 
 # Run clinical correlation analysis for a specified clock (default Horvath)
 rule clinical_analysis:
@@ -91,11 +90,10 @@ rule clinical_analysis:
         contingency = "results/clinical/Horvath_contingency_heatmaps.pdf",
         pheat = "results/clinical/Horvath_pvalue_heatmap.png"
     params:
-        clock = "Horvath"
+        clock = "Horvath" 
     log:
         "logs/clock/gdc_pan/clinical_analysis.log"
     shell:
-        # Pass clock as argument; script creates required output directory
         "Rscript scripts/clinical_correlation.R {params.clock} &> {log}"
 
 
