@@ -52,7 +52,7 @@ The workflow consists of the following steps:
 1. **Process individual projects** (`scripts/clock/process_project.R`): Calculates epigenetic clocks and generates plots for each TCGA project independently
 2. **Combine pan-cancer analysis** (`scripts/clock/combine_pancan.R`): Aggregates all project predictions and generates pan-cancer wide plots
 3. **Generate PDF report** (`scripts/clock/generate_pdf.R`): Combines all plots into a single PDF document
-4. **Clinical correlation analysis** (`scripts/clinical_correlation.R`): Perform clinical correlation analysis
+4. **Clinical correlation analysis** (`scripts/clinical_correlation.R`): Performs clinical correlation analysis
 
 ### Outputs
 
