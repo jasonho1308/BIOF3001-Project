@@ -22,7 +22,7 @@ Run `uv sync` to install all required libraries for python
 
 For data management, we have used [dvc](https://dvc.org/) to store and share our data, please contact Jason Ho for the server address.
 
-For workflow, we have used [snakemake](https://snakemake.readthedocs.io/en/stable/) to ensure reproducable results.
+For workflow, we have used [snakemake](https://snakemake.readthedocs.io/en/stable/) to ensure reproducible results.
 
 ### Usage
 
