@@ -30,10 +30,11 @@ if (is.na(lower_quantile) || is.na(upper_quantile) || lower_quantile >= upper_qu
 }
 
 message(sprintf("Reading predictions from %s", predictions_path))
-dt <- data.table::fread(
-  predictions_path,
-  select = c("project", "id", "Horvath_residuals")
-)
+raw_obj <- readRDS(predictions_path)
+if (!is.data.frame(raw_obj)) {
+  stop("Predictions RDS must deserialize to a data.frame/data.table object.")
+}
+dt <- data.table::as.data.table(raw_obj)
 
 required_cols <- c("project", "id", "Horvath_residuals")
 missing <- setdiff(required_cols, names(dt))
@@ -43,6 +44,7 @@ if (length(missing)) {
     paste(missing, collapse = ", ")
   ))
 }
+dt <- dt[, ..required_cols]
 
 sample_id_from_barcode <- function(barcodes) {
   vapply(barcodes, function(bc) {
