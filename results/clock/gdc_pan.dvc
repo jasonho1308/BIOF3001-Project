@@ -1,0 +1,6 @@
+outs:
+- md5: cd2d59cd1f776ea056008c2ba0372351.dir
+  size: 37652905
+  nfiles: 77
+  hash: md5
+  path: gdc_pan

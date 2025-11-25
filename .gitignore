@@ -5,3 +5,6 @@ results.rds
 *.ipynb
 # Stop tracking this analysis notebook (kept locally)
 scripts/analysis_GEO.ipynb
+.snakemake
+*.log
+
