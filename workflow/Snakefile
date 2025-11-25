@@ -90,7 +90,7 @@ rule clinical_analysis:
         contingency = "results/clinical/Horvath_contingency_heatmaps.pdf",
         pheat = "results/clinical/Horvath_pvalue_heatmap.png"
     params:
-        clock = "Horvath" 
+        clock = "Horvath"
     log:
         "logs/clock/gdc_pan/clinical_analysis.log"
     shell:
