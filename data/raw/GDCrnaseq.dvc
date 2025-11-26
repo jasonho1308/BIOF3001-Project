@@ -1,0 +1,6 @@
+outs:
+- md5: d0dcd404975cbf2bbd050da4d61d2409.dir
+  size: 479829217
+  nfiles: 114
+  hash: md5
+  path: GDCrnaseq
