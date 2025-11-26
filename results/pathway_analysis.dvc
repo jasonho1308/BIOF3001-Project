@@ -1,6 +1,6 @@
 outs:
-- md5: 9aff4cbd59204a0a8659278d77e4fab4.dir
-  size: 948894
-  nfiles: 11
+- md5: 224b9b9bc21f98df547202a62e0bd82a.dir
+  size: 3700190
+  nfiles: 19
   hash: md5
   path: pathway_analysis

@@ -1,6 +1,6 @@
 outs:
-- md5: 475dc72c2a5406f20fa4be1c12d8fcdf.dir
-  size: 31969820
-  nfiles: 27
+- md5: f2b371d68013a3b691b3f45eb04970dd.dir
+  size: 435977869
+  nfiles: 13
   hash: md5
   path: differential_analysis

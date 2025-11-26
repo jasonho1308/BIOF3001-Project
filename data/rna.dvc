@@ -1,0 +1,6 @@
+outs:
+- md5: 42944560e70e201ad0e8d37c268c6473.dir
+  size: 3135828723
+  nfiles: 742
+  hash: md5
+  path: rna
