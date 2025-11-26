@@ -50,8 +50,13 @@ build_clock_scatter <- function(prediction_df, clock) {
   ggplot(plot_df, aes(age, !!rlang::sym(clock))) +
     geom_point(alpha = 0.5) +
     geom_smooth(method = "lm", color = "red", formula = y ~ x) +
-    labs(title = title_text, x = "Chronological Age", y = "Predicted DNAmAge") +
-    theme_minimal()
+    labs(title = title_text, x = "Chronological Age", y = "BA") +
+    theme_minimal(base_size = 18) +
+    theme(
+      plot.title = element_text(size = 20, face = "bold"),
+      axis.title = element_text(size = 18),
+      axis.text = element_text(size = 16)
+    )
 }
 
 # Load all project predictions
@@ -111,13 +116,16 @@ saveRDS(combined_store, "results/clock/gdc_pan/gdc_pancan_predictions.rds")
 scatter_plots <- lapply(clock_cols, function(clock) build_clock_scatter(combined_store, clock))
 scatter_grid <- wrap_plots(scatter_plots, ncol = 3)
 scatter_grid <- scatter_grid +
-  plot_annotation(title = paste("DNAm Age Predictions for GDC Pan-Cancer"))
+  plot_annotation(
+    title = paste("BA Predictions for GDC Pan-Cancer"),
+    theme = theme(plot.title = element_text(size = 24, face = "bold", hjust = 0.5))
+  )
 
 ggsave(
   filename = "results/clock/gdc_pan/gdc_pancan_scatterplots.png",
   plot = scatter_grid,
-  width = 15,
-  height = 10
+  width = 24,
+  height = 18
 )
 
 # Plot boxplots of residuals
@@ -147,14 +155,19 @@ residual_plot <- ggplot(residuals_long, aes(x = clock, y = residual)) +
     title = paste("Residuals by clock for GDC Pan-Cancer"),
     x = "Clock", y = "Residual (predicted - fitted)"
   ) +
-  theme_minimal() +
-  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+  theme_minimal(base_size = 18) +
+  theme(
+    plot.title = element_text(size = 24, face = "bold"),
+    axis.title = element_text(size = 20),
+    axis.text = element_text(size = 18),
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
 
 ggsave(
   filename = "results/clock/gdc_pan/gdc_pancan_residuals_boxplots.png",
   plot = residual_plot,
-  width = 15,
-  height = 10
+  width = 12,
+  height = 9
 )
 
 message("Pan-cancer analysis complete!")
