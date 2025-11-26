@@ -11,277 +11,220 @@
 #   Rscript run_pathway_analysis.R <results_tsv> <label>
 #           [output_dir] [padj_cutoff] [lfc_cutoff]
 
+suppressPackageStartupMessages({
+  library(dplyr)
+  library(tibble)
+  library(readr)
+  library(stringr)
+  library(msigdbr)
+  library(clusterProfiler)
+  library(enrichplot)
+  library(ggplot2)
+  library(org.Hs.eg.db)
+})
+
+# ===================================================================
+# Helper: install missing packages
+# ===================================================================
 ensure_pkg <- function(pkg) {
   if (!requireNamespace(pkg, quietly = TRUE)) {
-    if (!requireNamespace("BiocManager", quietly = TRUE)) {
+    message("Installing ", pkg, "...")
+    if (!requireNamespace("BiocManager", quietly = TRUE))
       install.packages("BiocManager", repos = "https://cloud.r-project.org")
-    }
     BiocManager::install(pkg, ask = FALSE, update = FALSE)
-  }
-  suppressPackageStartupMessages(
     library(pkg, character.only = TRUE)
-  )
+  }
 }
+invisible(lapply(c("dplyr","tibble","readr","msigdbr","clusterProfiler","enrichplot","org.Hs.eg.db"), ensure_pkg))
 
-required_pkgs <- c(
-  "data.table",
-  "stringr",
-  "dplyr",
-  "tibble",
-  "ggplot2",
-  "msigdbr",
-  "clusterProfiler",
-  "enrichplot",
-  "org.Hs.eg.db"
-)
-invisible(lapply(required_pkgs, ensure_pkg))
+set.seed(123)
 
-if (getRversion() >= "2.15.1") {
-  utils::globalVariables(c("Description", "NES"))
-}
-
-# 1) Parse arguments describing DESeq2 results input and filtering thresholds
+# ===================================================================
+# Parse arguments
+# ===================================================================
 args <- commandArgs(trailingOnly = TRUE)
-if (!length(args)) {
-  stop(paste(
-    "Usage:",
-    "  run_pathway_analysis.R <results_tsv> <label> [output_dir] [padj_cutoff] [lfc_cutoff]",
-    "  run_pathway_analysis.R <results_dir> [output_dir] [padj_cutoff] [lfc_cutoff]",
-    "When a directory is supplied, all *_accel_vs_decel_deseq2_results.tsv files",
-    "inside are processed sequentially, and labels are derived from filenames.",
-    sep = "\n"
-  ))
+if (length(args) == 0) {
+  stop("Usage: Rscript run_hallmark_analysis.R <input> <label> [out_dir] [padj_cut=0.05] [lfc_cut=1.0]\n",
+       "       Or provide a directory containing *_deseq2_results.tsv files.")
 }
 
-results_input <- args[[1]]
-output_dir <- NULL
-padj_cutoff <- 0.05
-lfc_cutoff <- 1.0
+input_path   <- args[1]
+label_in     <- if (length(args) >= 2) args[2] else NULL
+out_dir      <- if (length(args) >= 3) args[3] else "results/pathway_analysis"
+padj_cut     <- if (length(args) >= 4) as.numeric(args[4]) else 0.05
+lfc_cut      <- if (length(args) >= 5) as.numeric(args[5]) else 1.0
 
-args_consumed <- 1L
-maybe_label <- NULL
+dir.create(out_dir, showWarnings = FALSE, recursive = TRUE)
 
-if (!dir.exists(results_input)) {
-  maybe_label <- if (length(args) >= 2) args[[2]] else NULL
-  args_consumed <- if (is.null(maybe_label)) 1L else 2L
-}
+# ===================================================================
+# Load Hallmark gene sets (once)
+# ===================================================================
+message("Loading MSigDB Hallmark gene sets...")
+hallmark <- msigdbr(species = "Homo sapiens", category = "H") %>%
+  dplyr::select(gs_name, entrez_gene) %>%
+  distinct()
 
-if (length(args) >= args_consumed + 1) {
-  output_dir <- args[[args_consumed + 1]]
-}
-if (length(args) >= args_consumed + 2) {
-  padj_cutoff <- as.numeric(args[[args_consumed + 2]])
-}
-if (length(args) >= args_consumed + 3) {
-  lfc_cutoff <- as.numeric(args[[args_consumed + 3]])
-}
+term2gene <- hallmark %>%
+  dplyr::select(term = gs_name, gene = entrez_gene)
 
-if (is.null(output_dir)) {
-  output_dir <- file.path("results", "pathway_analysis")
-}
-
-gene_id_col <- "gene_id"
-logfc_col <- "log2FoldChange"
-pval_col <- "pvalue"
-padj_col <- "padj"
-
-derive_label_from_path <- function(path) {
-  base <- basename(path)
-  label <- sub("_accel_vs_decel_deseq2_results\\.tsv$", "", base)
-  label <- sub("_deseq2_results\\.tsv$", "", label)
-  if (!nzchar(label)) {
-    label <- tools::file_path_sans_ext(base)
+# ===================================================================
+# Process one DESeq2 results file
+# ===================================================================
+run_one <- function(tsv_path, label) {
+  message("\n=== ", label, " ===\nReading: ", tsv_path)
+  
+  dt <- read_tsv(tsv_path, col_types = cols()) %>%
+    dplyr::rename_with(~"gene_id", any_of(c("gene_id", "rowname", "...1"))) %>%
+    mutate(gene_base = str_remove(gene_id, "\\..*$")) %>%
+    filter(!is.na(gene_base), gene_base != "")
+  
+  if (!all(c("log2FoldChange", "padj") %in% names(dt))) {
+    stop("Required columns missing: need log2FoldChange and padj")
   }
-  label
-}
-
-collect_targets <- function(input_path, provided_label = NULL) {
-  if (dir.exists(input_path)) {
-    tsv_files <- sort(list.files(input_path, pattern = "_accel_vs_decel_deseq2_results\\.tsv$", full.names = TRUE))
-    if (!length(tsv_files)) {
-      stop(sprintf("No *_accel_vs_decel_deseq2_results.tsv files found in %s", input_path))
-    }
-    labels <- vapply(tsv_files, derive_label_from_path, character(1))
-    return(stats::setNames(tsv_files, labels))
-  }
-
-  if (!file.exists(input_path)) {
-    stop(sprintf("Results file not found: %s", input_path))
-  }
-  label <- if (!is.null(provided_label) && nzchar(provided_label)) provided_label else derive_label_from_path(input_path)
-  stats::setNames(input_path, label)
-}
-
-run_pathway_for_dataset <- function(results_path, label, output_dir, padj_cutoff, lfc_cutoff) {
-  message(sprintf("\n==== Processing %s ====", label))
-
-  if (!file.exists(results_path)) {
-    stop(sprintf("Results file not found: %s", results_path))
-  }
-  dir.create(output_dir, recursive = TRUE, showWarnings = FALSE) # ensure results folder exists before writing artifacts
-
-  message(sprintf("Reading differential results from %s", results_path))
-  dt <- data.table::fread(results_path)
-  needed_cols <- c(gene_id_col, logfc_col, pval_col, padj_col)
-  missing_cols <- setdiff(needed_cols, names(dt))
-  if (length(missing_cols)) {
-    stop(sprintf("Missing required columns: %s", paste(missing_cols, collapse = ", ")))
-  }
-
-  dt$gene_base <- stringr::str_replace(dt[[gene_id_col]], "\\..*$", "")
-  dt <- dt[!is.na(dt$gene_base) & nzchar(dt$gene_base)]
-  dt <- dt[order(dt[[padj_col]], na.last = TRUE)]
-  dt <- dt[!duplicated(dt$gene_base)] # keep best padj record per Ensembl gene before mapping
-
-  # 3) Map Ensembl identifiers to Entrez IDs for Hallmark compatibility
-  message("Mapping Ensembl IDs to Entrez IDs …")
-  map_df <- clusterProfiler::bitr(
-    unique(dt$gene_base),
-    fromType = "ENSEMBL",
-    toType = c("ENTREZID", "SYMBOL"),
-    OrgDb = org.Hs.eg.db::org.Hs.eg.db
-  )
-  if (!nrow(map_df)) {
-    stop("Failed to map any genes to Entrez IDs; cannot proceed with pathway analysis.")
-  }
-  data.table::setDT(map_df)
-  merged_dt <- merge(dt, map_df, by.x = "gene_base", by.y = "ENSEMBL")
-  if (!nrow(merged_dt)) {
-    stop("No genes remain after mapping.")
-  }
-
-  sig_dt <- merged_dt[
-    !is.na(merged_dt[[padj_col]]) & merged_dt[[padj_col]] <= padj_cutoff &
-      !is.na(merged_dt[[logfc_col]]) & abs(merged_dt[[logfc_col]]) >= lfc_cutoff &
-      !is.na(merged_dt$ENTREZID)
-  ]
-
-  if (!nrow(sig_dt)) {
-    warning(sprintf("No significant genes detected for %s with padj <= %.3f and |log2FC| >= %.2f", label, padj_cutoff, lfc_cutoff))
-  }
-
-  universe_genes <- unique(merged_dt$ENTREZID[!is.na(merged_dt$ENTREZID)]) # reference set for ORA background
-  sig_genes <- unique(sig_dt$ENTREZID) # foreground list that passed padj/LFC thresholds
-
-  # 4) Get Hallmark gene sets (H collection) for Homo sapiens
-  message("Preparing MSigDB Hallmark gene sets …")
-  hallmark_df <- msigdbr::msigdbr(species = "Homo sapiens", collection = "H")
-  gene_col <- intersect(c("entrez_gene", "ncbi_gene"), names(hallmark_df))
-  if (!length(gene_col)) {
-    stop("Could not find an Entrez/Ncbi gene column in msigdbr output.")
-  }
-  term2gene <- hallmark_df[, c("gs_name", gene_col[1])] # build TERM2GENE mapping table once per run
-  names(term2gene) <- c("gs_name", "entrez_gene")
-  term2gene <- dplyr::distinct(term2gene)
-
-  ora_path <- file.path(output_dir, sprintf("%s_hallmark_ora.tsv", label))
-  gsea_path <- file.path(output_dir, sprintf("%s_hallmark_gsea.tsv", label))
-  barplot_path <- file.path(output_dir, sprintf("%s_hallmark_gsea_barplot.png", label))
-  enrichment_path <- file.path(output_dir, sprintf("%s_hallmark_gsea_top_enrichment.png", label))
-
-  # 5) Run Over-Representation Analysis (ORA) on the significant subset
+  
+  # Prefer Wald statistic for ranking, fall back to log2FC
+  dt <- dt %>%
+    mutate(rank_stat = ifelse(is.na(stat) | is.nan(stat), log2FoldChange, stat))
+  
+  # Map Ensembl → Entrez (keep best per gene)
+  message("Mapping Ensembl → Entrez...")
+  gene_list <- unique(dt$gene_base)
+  map <- bitr(gene_list, fromType = "ENSEMBL", toType = c("ENTREZID", "SYMBOL"), OrgDb = org.Hs.eg.db)
+  
+  dt_mapped <- dt %>%
+    inner_join(map, by = c("gene_base" = "ENSEMBL")) %>%
+    group_by(ENTREZID) %>%
+    slice_max(order_by = abs(rank_stat), n = 1, with_ties = FALSE) %>%
+    ungroup()
+  
+  if (nrow(dt_mapped) == 0) stop("No genes mapped to Entrez IDs")
+  
+  # ---------------------------------------------------------------
+  # 1. ORA on significant genes
+  # ---------------------------------------------------------------
+  sig_genes <- dt_mapped %>%
+    filter(padj <= padj_cut, abs(log2FoldChange) >= lfc_cut, !is.na(ENTREZID)) %>%
+    pull(ENTREZID) %>% unique()
+  
+  universe <- dt_mapped %>% pull(ENTREZID) %>% unique()
+  
+  ora_file <- file.path(out_dir, paste0(label, "_hallmark_ora.tsv"))
   if (length(sig_genes) >= 10) {
-    message(sprintf("Running ORA for %d significant genes", length(sig_genes)))
-    ora_res <- tryCatch({
-      clusterProfiler::enricher(
-        gene = sig_genes,
-        TERM2GENE = term2gene,
-        universe = universe_genes,
-        pAdjustMethod = "BH",
-        qvalueCutoff = 0.25
-      )
-    }, error = function(e) {
-      warning(sprintf("ORA failed: %s", e$message))
-      NULL
-    })
-    if (!is.null(ora_res) && nrow(ora_res@result)) {
-      data.table::fwrite(data.table::as.data.table(ora_res@result), ora_path, sep = "\t")
-      message(sprintf("ORA results written to %s", ora_path))
-    } else {
-      warning("ORA returned no pathways.")
+    message("Running ORA (", length(sig_genes), " significant genes)...")
+    ora <- enricher(
+      gene = sig_genes,
+      universe = universe,
+      TERM2GENE = term2gene,
+      pvalueCutoff = 0.25,
+      pAdjustMethod = "BH",
+      qvalueCutoff = 1
+    )
+    if (!is.null(ora) && nrow(ora@result) > 0) {
+      write_tsv(as_tibble(ora@result), ora_file)
+      message("→ ORA results: ", ora_file)
     }
   } else {
-    warning("Insufficient significant genes for ORA (need >= 10).")
+    message("Skipping ORA (<10 significant genes)")
   }
-
-  # 6) Run GSEA on ranked statistics (full gene universe)
-  message("Running GSEA …")
-  merged_dt$stat_value <- ifelse(!is.na(merged_dt$stat), merged_dt$stat, merged_dt[[logfc_col]])
-  rank_df <- merged_dt[!is.na(merged_dt$stat_value) & !is.na(merged_dt$ENTREZID)]
-  rank_df <- rank_df[order(-abs(rank_df$stat_value))]
-  rank_df <- rank_df[!duplicated(rank_df$ENTREZID)]
-  rank_vector <- rank_df$stat_value
-  names(rank_vector) <- rank_df$ENTREZID
-  rank_vector <- sort(rank_vector, decreasing = TRUE)
-
-  if (!length(rank_vector)) {
-    warning("Ranked gene list is empty; skipping GSEA.")
-    gsea_res <- NULL
-  } else {
-    set.seed(123)
-    gsea_res <- tryCatch({
-      clusterProfiler::GSEA(
-        geneList = rank_vector,
-        TERM2GENE = term2gene,
-        minGSSize = 10,
-        maxGSSize = 500,
-        pvalueCutoff = 1,
-        pAdjustMethod = "BH",
-        seed = TRUE
-      )
-    }, error = function(e) {
-      warning(sprintf("GSEA failed: %s", e$message))
-      NULL
-    })
-  }
-
-  if (!is.null(gsea_res) && nrow(gsea_res@result)) {
-    gsea_dt <- data.table::as.data.table(gsea_res@result)
-    data.table::setorder(gsea_dt, p.adjust)
-    data.table::fwrite(gsea_dt, gsea_path, sep = "\t")
-    message(sprintf("GSEA results written to %s", gsea_path))
-
-    sig_gsea <- gsea_dt[!is.na(p.adjust) & p.adjust < 0.05]
-    if (nrow(sig_gsea)) {
-      plot_dt <- data.table::copy(sig_gsea)
-      plot_dt$Description <- gsub("^HALLMARK_", "", plot_dt$ID)
-      plot_dt <- plot_dt[order(p.adjust)]
-      plot_dt$Description <- factor(plot_dt$Description, levels = plot_dt$Description[order(plot_dt$NES)])
-      p_bar <- ggplot2::ggplot(plot_dt, ggplot2::aes_string(x = "Description", y = "NES")) +
-        ggplot2::geom_col(ggplot2::aes(fill = -log10(p.adjust))) +
-        ggplot2::coord_flip() +
-        ggplot2::scale_fill_gradient(name = "-log10(padj)", low = "skyblue", high = "firebrick") +
-        ggplot2::labs(
-          title = sprintf("Significant Hallmark Pathways (n = %d)", nrow(plot_dt)),
-          x = NULL,
-          y = "Normalized Enrichment Score (NES)"
-        ) +
-        ggplot2::theme_minimal(base_size = 13)
-      ggplot2::ggsave(barplot_path, p_bar, width = 8, height = 6, dpi = 300)
-      message(sprintf("Saved GSEA barplot to %s", barplot_path))
-
-      top_term <- gsea_dt$ID[1]
-      ep <- enrichplot::gseaplot2(gsea_res, geneSetID = top_term, title = top_term)
-      ggplot2::ggsave(enrichment_path, ep, width = 8, height = 6, dpi = 300)
-      message(sprintf("Saved enrichment plot to %s", enrichment_path))
-    } else {
-      message("No significant hallmark pathways (padj < 0.05) for barplot/enrichment plot.")
-    }
-  } else {
-    warning("GSEA returned no pathways.")
-  }
-
-  message(sprintf("Finished pathway analysis for %s.", label))
-}
-
-targets <- collect_targets(results_input, maybe_label)
-
-for (label in names(targets)) {
-  target_path <- targets[[label]]
-  tryCatch(
-    run_pathway_for_dataset(target_path, label, output_dir, padj_cutoff, lfc_cutoff),
-    error = function(e) {
-      warning(sprintf("Failed pathway analysis for %s (%s): %s", label, target_path, e$message))
-    }
+  
+  # ---------------------------------------------------------------
+  # 2. GSEA on full ranked list
+  # ---------------------------------------------------------------
+  message("Preparing ranked list for GSEA...")
+  rank_vec <- dt_mapped$rank_stat
+  names(rank_vec) <- dt_mapped$ENTREZID
+  rank_vec <- sort(rank_vec, decreasing = TRUE)
+  
+  gsea_file <- file.path(out_dir, paste0(label, "_hallmark_gsea.tsv"))
+  gsea_res <- GSEA(
+    geneList = rank_vec,
+    TERM2GENE = term2gene,
+    minGSSize = 10,
+    maxGSSize = 500,
+    pvalueCutoff = 1,
+    pAdjustMethod = "BH",
+    seed = TRUE,
+    verbose = FALSE
   )
+  
+  gsea_tbl <- as_tibble(gsea_res@result) %>%
+    arrange(p.adjust)
+  
+  write_tsv(gsea_tbl, gsea_file)
+  message("→ GSEA results: ", gsea_file)
+  
+  # ---------------------------------------------------------------
+  # 3. Plots (only if significant pathways exist)
+  # ---------------------------------------------------------------
+  sig_pathways <- gsea_tbl %>% filter(p.adjust < 0.05)
+  
+  if (nrow(sig_pathways) > 0) {
+    message("Found ", nrow(sig_pathways), " significant Hallmark pathways → making plots")
+    
+    # Barplot
+    plot_df <- sig_pathways %>%
+      mutate(Description = str_remove(ID, "^HALLMARK_")) %>%
+      arrange(NES)
+    
+    p_bar <- ggplot(plot_df, aes(x = reorder(Description, NES), y = NES, fill = -log10(p.adjust))) +
+      geom_col(width = 0.8) +
+      coord_flip() +
+      scale_fill_gradient(name = "-log10(padj)", low = "steelblue", high = "firebrick") +
+      labs(
+        title = paste0("Significant Hallmark Pathways (n = ", nrow(plot_df), ") – ", label),
+        x = NULL,
+        y = "Normalized Enrichment Score (NES)"
+      ) +
+      theme_minimal(base_size = 13) +
+      theme(
+        plot.title = element_text(face = "bold"),
+        axis.text.y = element_text(size = 11)
+      )
+    
+    bar_file <- file.path(out_dir, paste0(label, "_hallmark_gsea_barplot.png"))
+    ggsave(bar_file, p_bar, width = 9, height = max(5, 0.25 * nrow(plot_df) + 2), dpi = 300, bg = "white")
+    message("→ Barplot: ", bar_file)
+    
+    # Top enrichment plot
+    top_id <- gsea_tbl$ID[1]
+    p_enrich <- gseaplot2(gsea_res, geneSetID = top_id, title = str_remove(top_id, "^HALLMARK_"))
+    
+    enrich_file <- file.path(out_dir, paste0(label, "_hallmark_gsea_top_enrichment.png"))
+    ggsave(enrich_file, p_enrich, width = 8, height = 6, dpi = 300, bg = "white")
+    message("→ Top enrichment plot: ", enrich_file)
+    
+  } else {
+    message("No significant Hallmark pathways (padj < 0.05)")
+  }
 }
+
+# ===================================================================
+# Main: collect files and run
+# ===================================================================
+if (dir.exists(input_path)) {
+  files <- list.files(input_path, pattern = "_deseq2_results\\.tsv$|_full_results\\.tsv$", full.names = TRUE)
+  if (length(files) == 0) stop("No DESeq2 results found in directory")
+  
+  labels <- basename(files) %>%
+    str_remove("_accel_vs_decel.*|_full_results\\.tsv$|_deseq2_results\\.tsv$") %>%
+    str_remove("\\.tsv$")
+  
+  targets <- setNames(files, labels)
+  
+} else {
+  if (!file.exists(input_path)) stop("File not found: ", input_path)
+  label <- if (is.null(label_in) || label_in == "") {
+    tools::file_path_sans_ext(basename(input_path))
+  } else label_in
+  targets <- setNames(input_path, label)
+}
+
+for (lbl in names(targets)) {
+  tryCatch({
+    run_one(targets[[lbl]], lbl)
+  }, error = function(e) {
+    warning("Failed for ", lbl, ": ", e$message)
+  })
+}
+
+message("\nAll done! Results saved in: ", normalizePath(out_dir))
