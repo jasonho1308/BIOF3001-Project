@@ -8,6 +8,19 @@ if (exists("snakemake")) {
   sink(log_file, type = "message", split = FALSE)
 }
 
+# Get output paths from snakemake or use defaults
+if (exists("snakemake")) {
+  pheno_output <- snakemake@output$pheno
+  counts_output <- snakemake@output$counts
+  queries_output <- snakemake@output$queries
+  missing_output <- snakemake@output$missing
+} else {
+  pheno_output <- "data/processed/gdc_pancan/normal_pheno.tsv"
+  counts_output <- "data/processed/gdc_pancan/normal_counts_by_project.csv"
+  queries_output <- "data/processed/gdc_pancan/queries.rds"
+  missing_output <- "data/processed/gdc_pancan/missing_ids.rds"
+}
+
 library(UCSCXenaTools)
 library(dplyr)
 library(TCGAbiolinks)
@@ -31,14 +44,16 @@ print(dim(pheno_data))
 # Filter for normal tissue, finding if "normal" in sample type
 normal_samples <- pheno_data %>% filter(grepl("normal", samples.sample_type, ignore.case = TRUE))
 
+
 # make sure output directory exists
-if (!dir.exists("data/processed/gdc_pancan")) {
-  dir.create("data/processed/gdc_pancan", recursive = TRUE)
+output_dir <- dirname(pheno_output)
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
 }
 
 # save normal samples into tsv
 write.table(normal_samples,
-  file = "data/processed/gdc_pancan/normal_pheno.tsv", sep = "\t",
+  file = pheno_output, sep = "\t",
   row.names = FALSE, quote = FALSE
 )
 
@@ -52,7 +67,7 @@ sample_counts <- sapply(normal_samples_by_project, nrow)
 print(sample_counts)
 
 write.csv(as.data.frame(sample_counts),
-  file = "data/processed/gdc_pancan/normal_counts_by_project.csv",
+  file = counts_output,
   row.names = TRUE,
   quote = FALSE
 )
@@ -96,7 +111,7 @@ process_project <- function(proj, samples_by_project) {
     error = function(e) {
       message(paste("Error processing project:", proj))
       message(e)
-      
+
       # used <<- to assign to outer scope
       result$missing_ids <<- ids
     }
@@ -137,8 +152,8 @@ for (result in results) {
 }
 
 # save missing ids, gdc queries to processed data
-saveRDS(missing_ids, file = "data/processed/gdc_pancan/missing_ids.rds")
-saveRDS(gdc_queries, file = "data/processed/gdc_pancan/queries.rds")
+saveRDS(missing_ids, file = missing_output)
+saveRDS(gdc_queries, file = queries_output)
 
 # Close log file if running via Snakemake
 if (exists("snakemake")) {

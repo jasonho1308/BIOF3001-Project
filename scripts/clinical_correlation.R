@@ -9,6 +9,17 @@ if (exists("snakemake")) {
   sink(con, type = "output")
   sink(con, type = "message")
   message("Logging to ", log_file)
+  prediction_path <- snakemake@input[["predictions"]]
+  pheno_path <- snakemake@input[["pheno"]]
+  clock_name <- snakemake@params[["clock"]]
+} else {
+  args <- commandArgs(trailingOnly = TRUE)
+  if (length(args) < 3) {
+    stop("Usage: Rscript clinical_correlation.R <prediction_path> <pheno_path> <clock_name>")
+  }
+  prediction_path <- args[1]
+  pheno_path <- args[2]
+  clock_name <- args[3]
 }
 
 
@@ -21,13 +32,6 @@ library(png)
 library(grid)
 library(stats)
 
-# Configuration
-args <- commandArgs(trailingOnly = TRUE)
-if (length(args) > 0) {
-  clock_name <- args[1]
-} else {
-  clock_name <- "Horvath" # Default clock
-}
 
 message(sprintf("Analyzing clinical correlations for %s clock", clock_name))
 
@@ -41,13 +45,13 @@ if (!dir.exists("results/clinical")) {
 # ============================================================================
 
 # Load predictions
-predictions <- readRDS("results/clock/gdc_pan/gdc_pancan_predictions.rds")
+predictions <- readRDS(prediction_path)
 message(sprintf("Loaded %d samples with predictions", nrow(predictions)))
 
 # Load phenotype data
-pheno <- read.table("data/processed/gdc_pancan/normal_pheno.tsv",
+pheno <- read.table(pheno_path,
   header = TRUE, sep = "\t", quote = "",
-  stringsAsFactors = FALSE, na.strings = c("NA", "", "Not Reported", "not reported")
+  stringsAsFactors = FALSE
 )
 
 message(sprintf("Loaded phenotype data for %d samples", nrow(pheno)))
@@ -56,6 +60,7 @@ message(sprintf("Loaded phenotype data for %d samples", nrow(pheno)))
 # Calculate age acceleration (binary: accelerated vs decelerated)
 # ============================================================================
 
+print(prediction_path)
 if (!clock_name %in% colnames(predictions)) {
   stop(sprintf(
     "Clock '%s' not found in predictions. Available: %s",

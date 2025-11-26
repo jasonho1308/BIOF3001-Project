@@ -8,12 +8,22 @@ if (exists("snakemake")) {
   log_file <- file(snakemake@log[[1]], open = "wt")
   sink(log_file, type = "output", split = FALSE)
   sink(log_file, type = "message", split = FALSE)
+  queries_path <- snakemake@input[["queries"]]
+  data_dir <- snakemake@input[["data"]]
+  predictions_out <- snakemake@output[["predictions"]]
+  scatter_out <- snakemake@output[["scatter"]]
+  residuals_out <- snakemake@output[["residuals"]]
 } else {
   args <- commandArgs(trailingOnly = TRUE)
   if (length(args) < 1) {
     stop("Usage: Rscript process_project.R <PROJECT_NAME>")
   }
   proj <- args[1]
+  queries_path <- "data/processed/gdc_pancan/methyl/queries.rds"
+  data_dir <- "data/raw/GDCdata/"
+  predictions_out <- file.path("results/clock/gdc_pan", paste0(proj, "_predictions.rds"))
+  scatter_out <- file.path("results/clock/gdc_pan", paste0(proj, "_scatterplots.png"))
+  residuals_out <- file.path("results/clock/gdc_pan", paste0(proj, "_residuals_boxplots.png"))
 }
 
 library(TCGAbiolinks)
@@ -29,13 +39,13 @@ library(rlang)
 
 message(paste("Processing project:", proj))
 
-# Load queries
-gdc_queries <- readRDS("data/processed/gdc_pancan/queries.rds")
+# Ensure output directories exist
+dir.create(dirname(predictions_out), recursive = TRUE, showWarnings = FALSE)
+dir.create(dirname(scatter_out), recursive = TRUE, showWarnings = FALSE)
+dir.create(dirname(residuals_out), recursive = TRUE, showWarnings = FALSE)
 
-# Create output directory
-if (!dir.exists("results/clock/gdc_pan")) {
-  dir.create("results/clock/gdc_pan", recursive = TRUE)
-}
+# Load queries
+gdc_queries <- readRDS(queries_path)
 
 
 clock_cols <- c(
@@ -139,15 +149,27 @@ query_TCGA_meth <- gdc_queries[[proj]]
 
 if (is.null(query_TCGA_meth)) {
   message(sprintf("No query found for project %s in queries.rds; skipping.", proj))
-  saveRDS(data.frame(), paste0("results/clock/gdc_pan/", proj, "_predictions.rds"))
+  saveRDS(data.frame(), predictions_out)
+  # Save placeholder plots to satisfy Snakemake outputs
+  p_blank <- ggplot() +
+    theme_void() +
+    ggtitle(paste("No data for", proj))
+  ggsave(filename = scatter_out, plot = p_blank, width = 8, height = 6)
+  ggsave(filename = residuals_out, plot = p_blank, width = 8, height = 6)
   quit(status = 0)
 }
 
-platform_ses <- prepare_project_methylation(proj, query_TCGA_meth, "data/raw/GDCdata/")
+platform_ses <- prepare_project_methylation(proj, query_TCGA_meth, data_dir)
 if (is.null(platform_ses) || !length(platform_ses)) {
   message(paste("No data available for project:", proj))
   # Save empty prediction to mark as processed
-  saveRDS(data.frame(), paste0("results/clock/gdc_pan/", proj, "_predictions.rds"))
+  saveRDS(data.frame(), predictions_out)
+  # Save placeholder plots to satisfy Snakemake outputs
+  p_blank <- ggplot() +
+    theme_void() +
+    ggtitle(paste("No data for", proj))
+  ggsave(filename = scatter_out, plot = p_blank, width = 8, height = 6)
+  ggsave(filename = residuals_out, plot = p_blank, width = 8, height = 6)
   quit(status = 0)
 }
 
@@ -191,14 +213,20 @@ for (platform_name in names(platform_ses)) {
 if (!length(project_predictions)) {
   message(sprintf("No predictions generated for project: %s", proj))
   # Save empty prediction to mark as processed
-  saveRDS(data.frame(), paste0("results/clock/gdc_pan/", proj, "_predictions.rds"))
+  saveRDS(data.frame(), predictions_out)
+  # Save placeholder plots to satisfy Snakemake outputs
+  p_blank <- ggplot() +
+    theme_void() +
+    ggtitle(paste("No data for", proj))
+  ggsave(filename = scatter_out, plot = p_blank, width = 8, height = 6)
+  ggsave(filename = residuals_out, plot = p_blank, width = 8, height = 6)
   quit(status = 0)
 }
 
 prediction <- dplyr::bind_rows(project_predictions)
 
 # Save predictions for later combination
-saveRDS(prediction, paste0("results/clock/gdc_pan/", proj, "_predictions.rds"))
+saveRDS(prediction, predictions_out)
 
 # Generate scatter plots
 scatter_plots <- lapply(clock_cols, function(clock) build_clock_scatter(prediction, clock))
@@ -207,7 +235,7 @@ scatter_grid <- scatter_grid +
   plot_annotation(title = paste("DNAm Age Predictions for", proj))
 
 ggsave(
-  filename = paste0("results/clock/gdc_pan/", proj, "_scatterplots.png"),
+  filename = scatter_out,
   plot = scatter_grid,
   width = 15,
   height = 10
@@ -244,7 +272,7 @@ residual_plot <- ggplot(residuals_long, aes(x = clock, y = residual)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 ggsave(
-  filename = paste0("results/clock/gdc_pan/", proj, "_residuals_boxplots.png"),
+  filename = residuals_out,
   plot = residual_plot,
   width = 12,
   height = 6
