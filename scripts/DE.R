@@ -1,285 +1,268 @@
-#!/usr/bin/env Rscript
-# Title: Differential-expression workflow – Accelerated vs Decelerated (Horvath clock)
-# Description: Automates Horvath-style differential expression by pairing cohort RNA-seq
-#   counts with clock predictions, enforcing instructor-provided Accelerated/Decelerated
-#   labels when available, and fitting DESeq2 models for each cohort. Writes annotated
-#   result tables plus PCA and volcano plots per tissue. Designed to run standalone for
-#   BRCA/KIRC/LIHC by default but can accept custom count/prediction inputs via CLI.
+# Perform differential expression analysis
+# Analyzes BRCA, THCA (within-tissue Q1/Q4) and UCEC (pan-cancer Q1/Q4)
 
-suppressPackageStartupMessages({
-  library(data.table)
-  library(DESeq2)
-  library(ggplot2)
-  library(SummarizedExperiment)
-})
+library(DESeq2)
+library(ggplot2)
+library(dplyr)
+library(parallel)
 
-#======================================================================
-# Helper functions
-#======================================================================
+# Detect number of cores (use half to avoid overwhelming the system)
+n_cores <- max(1, floor(detectCores() / 2) + 2)
+message(sprintf("Using %d cores for parallel processing", n_cores))
 
-ensure_pkg <- function(pkg) {
-  if (!requireNamespace(pkg, quietly = TRUE)) {
-    message("Installing ", pkg, " ...")
-    if (!requireNamespace("BiocManager", quietly = TRUE)) {
-      install.packages("BiocManager", repos = "https://cloud.r-project.org")
+# Define projects to analyze
+# BRCA and THCA use within-tissue quartiles
+# UCEC uses pan-cancer quartiles
+tissue_projects <- c("TCGA-BRCA", "TCGA-THCA")
+pancan_projects <- c("TCGA-UCEC")
+all_projects <- c(tissue_projects, pancan_projects)
+
+# Load clock predictions (contains sample metadata but not counts)
+gdc_pancan <- readRDS("results/rna/gdc_pancan_rna_predictions.rds")
+
+if (nrow(gdc_pancan) == 0) {
+  stop("No samples found for differential expression analysis!")
+}
+
+message(sprintf("Loaded %d samples with clock predictions", nrow(gdc_pancan)))
+
+# Calculate pan-cancer quartiles from ALL samples BEFORE filtering to projects
+# This ensures UCEC is compared against the true pan-cancer distribution
+pancan_age_acc <- gdc_pancan$Horvath_residuals
+pancan_q1 <- quantile(pancan_age_acc, 0.25, na.rm = TRUE)
+pancan_q4 <- quantile(pancan_age_acc, 0.75, na.rm = TRUE)
+message(sprintf("Pan-cancer Horvath_residuals Q1: %.2f, Q4: %.2f (from %d samples)", 
+                pancan_q1, pancan_q4, sum(!is.na(pancan_age_acc))))
+
+# Filter to only the projects of interest
+gdc_pancan <- gdc_pancan[gdc_pancan$project %in% all_projects, ]
+message(sprintf("Filtered to %d samples from %s", nrow(gdc_pancan), paste(all_projects, collapse = ", ")))
+
+# Load RNA-seq queries to map sample IDs to file paths
+rna_queries <- readRDS("data/rna/queries.rds")
+
+# Function to read count data from a single file
+read_count_file <- function(file_path) {
+  counts <- read.delim(file_path, comment.char = "#", stringsAsFactors = FALSE)
+  # Skip the first 4 rows which contain N_unmapped, N_multimapping, N_noFeature, N_ambiguous
+  counts <- counts[!grepl("^N_", counts$gene_id), ]
+  # Use unstranded counts (column 4)
+  count_vec <- counts$unstranded
+  names(count_vec) <- counts$gene_id
+  return(count_vec)
+}
+
+# Build a mapping from sample_submitter_id to file paths (process projects in parallel)
+message("Building sample to file path mapping...")
+
+process_project_mapping <- function(proj, rna_queries) {
+  query <- rna_queries[[proj]]
+  if (is.null(query) || is.null(query$results[[1]])) return(NULL)
+  
+  results_df <- query$results[[1]]
+  mappings <- list()
+  
+  for (i in seq_len(nrow(results_df))) {
+    sample_id <- results_df$sample.submitter_id[i]
+    file_id <- results_df$file_id[i]
+    file_name <- results_df$file_name[i]
+    
+    file_path <- file.path("data/rna", proj, "Transcriptome_Profiling", 
+                           "Gene_Expression_Quantification", file_id, file_name)
+    
+    if (file.exists(file_path)) {
+      mappings[[sample_id]] <- file_path
     }
-    BiocManager::install(pkg, ask = FALSE, update = FALSE)
   }
-  library(pkg, character.only = TRUE)
+  return(mappings)
 }
 
-invisible(lapply(c("data.table", "DESeq2", "ggplot2", "SummarizedExperiment"), ensure_pkg))
+# Process projects in parallel to build mapping
+project_mappings <- mclapply(names(rna_queries), function(proj) {
+  process_project_mapping(proj, rna_queries)
+}, mc.cores = n_cores)
 
-shorten_barcode <- function(x) substr(x, 1, 16)
+# Combine all project mappings into one list
+sample_file_map <- do.call(c, project_mappings)
 
-sanitize_sample <- function(x) {
-  x <- gsub("-", ".", x, fixed = TRUE)
-  gsub("N\\.DNA", "N.RNA", x)
+message(sprintf("Found %d samples with RNA-seq files", length(sample_file_map)))
+
+# Filter predictions to samples with available count files
+samples_with_counts <- gdc_pancan$sample_submitter_id %in% names(sample_file_map)
+gdc_pancan <- gdc_pancan[samples_with_counts, ]
+message(sprintf("After filtering: %d samples with both clock predictions and RNA-seq data", nrow(gdc_pancan)))
+
+if (nrow(gdc_pancan) == 0) {
+  stop("No samples found with both clock predictions and RNA-seq count files!")
 }
 
-load_labels <- function(path) {
-  if (is.null(path) || !nzchar(path) || !file.exists(path)) return(NULL)
-  dt <- tryCatch(fread(path), error = function(e) {
-    warning(sprintf("Failed to read classification sheet %s: %s", path, e$message))
+# Read count data for all samples in parallel
+message("Reading RNA-seq count files in parallel...")
+sample_ids <- gdc_pancan$sample_submitter_id
+
+count_list <- mclapply(sample_ids, function(sample_id) {
+  file_path <- sample_file_map[[sample_id]]
+  read_count_file(file_path)
+}, mc.cores = n_cores)
+names(count_list) <- sample_ids
+
+message("Combining counts into matrix...")
+
+# Combine into a count matrix (genes as rows, samples as columns)
+all_genes <- unique(unlist(lapply(count_list, names)))
+count_matrix <- matrix(0, nrow = length(all_genes), ncol = length(count_list),
+                       dimnames = list(all_genes, names(count_list)))
+
+for (sample_id in names(count_list)) {
+  counts <- count_list[[sample_id]]
+  count_matrix[names(counts), sample_id] <- counts
+}
+
+message(sprintf("Count matrix: %d genes x %d samples", nrow(count_matrix), ncol(count_matrix)))
+
+# Function to run DE analysis for a specific project
+run_de_analysis <- function(project_name, samples_df, count_mat, use_pancan_quartiles = FALSE) {
+  message(sprintf("\n========== Processing %s ==========", project_name))
+  
+  # Filter to this project
+  proj_samples <- samples_df[samples_df$project == project_name, ]
+  proj_count_mat <- count_mat[, proj_samples$sample_submitter_id, drop = FALSE]
+  
+  message(sprintf("Project has %d samples", nrow(proj_samples)))
+  
+  # Calculate quartiles using age acceleration residuals
+  # Use ageAcc2.Horvath for within-tissue, Horvath_residuals for pan-cancer
+  if (use_pancan_quartiles) {
+    age_acc <- proj_samples$Horvath_residuals
+  } else {
+    age_acc <- proj_samples$ageAcc2.Horvath
+  }
+  
+  if (use_pancan_quartiles) {
+    # Use pan-cancer quartiles
+    q1 <- pancan_q1
+    q4 <- pancan_q4
+    message(sprintf("Using pan-cancer quartiles - Q1: %.2f, Q4: %.2f", q1, q4))
+  } else {
+    # Use within-tissue quartiles
+    q1 <- quantile(age_acc, 0.25, na.rm = TRUE)
+    q4 <- quantile(age_acc, 0.75, na.rm = TRUE)
+    message(sprintf("Using within-tissue quartiles - Q1: %.2f, Q4: %.2f", q1, q4))
+  }
+  
+  # Classify samples as Q1 (decelerated) or Q4 (accelerated)
+  # Q1 = lower age acceleration (younger than expected)
+  # Q4 = higher age acceleration (older than expected)
+  age_acc_class <- ifelse(age_acc <= q1, "Q1",
+                          ifelse(age_acc >= q4, "Q4", NA))
+  
+  # Filter to only Q1 and Q4 samples
+  keep_samples <- !is.na(age_acc_class)
+  proj_samples <- proj_samples[keep_samples, ]
+  proj_count_mat <- proj_count_mat[, proj_samples$sample_submitter_id, drop = FALSE]
+  age_acc_class <- age_acc_class[keep_samples]
+  
+  message(sprintf("After Q1/Q4 filtering: %d samples (Q1: %d, Q4: %d)", 
+                  nrow(proj_samples), 
+                  sum(age_acc_class == "Q1"), 
+                  sum(age_acc_class == "Q4")))
+  
+  if (nrow(proj_samples) < 10) {
+    warning(sprintf("Too few samples for %s, skipping...", project_name))
     return(NULL)
-  })
-  if (is.null(dt)) return(NULL)
-  required <- c("sample_id", "classification")
-  missing <- setdiff(required, names(dt))
-  if (length(missing)) {
-    warning(sprintf("Classification sheet %s missing columns: %s", path, paste(missing, collapse = ", ")))
-    return(NULL)
   }
-  dt[, sample_id := shorten_barcode(sample_id)]
-  dt[, classification := factor(classification, levels = c("Accelerated", "Decelerated"))]
-  if (all(is.na(dt$classification))) return(NULL)
-  dt
-}
-
-#======================================================================
-# Default parameters for the three main cohorts
-#======================================================================
-
-default_params <- list(
-  BRCA = list(
-    project     = "TCGA-BRCA",
-    counts_path = "results/differential_analysis/TCGA-BRCA_tissue_quartiles_extreme_rnaseq_counts.tsv",
-    clock_path  = "results/clock/gdc_pan/TCGA-BRCA_predictions.rds",
-    clock_col   = "ageAcc2.Horvath",
-    labels_path = "results/clock/derived/TCGA-BRCA_tissue_quartiles_extreme_samples.txt",
-    out_dir     = "results/differential_analysis",
-    padj_cut    = 0.05,
-    lfc_cut     = 1.0
-  ),
-  KIRC = list(
-    project     = "TCGA-KIRC",
-    counts_path = "results/differential_analysis/TCGA-KIRC_tissue_quartiles_extreme_rnaseq_counts.tsv",
-    clock_path  = "results/clock/gdc_pan/TCGA-KIRC_predictions.rds",
-    clock_col   = "ageAcc2.Horvath",
-    labels_path = "results/clock/derived/TCGA-KIRC_tissue_quartiles_extreme_samples.txt",
-    out_dir     = "results/differential_analysis",
-    padj_cut    = 0.05,
-    lfc_cut     = 1.0
-  ),
-  LIHC = list(
-    project     = "TCGA-LIHC",
-    counts_path = "results/differential_analysis/TCGA-LIHC_balanced_global_extreme_rnaseq_counts.tsv",
-    clock_path  = "results/clock/gdc_pan/TCGA-LIHC_predictions.rds",
-    clock_col   = "ageAcc2.Horvath",
-    labels_path = "results/clock/derived/TCGA-LIHC_balanced_global_extreme_samples.txt",
-    out_dir     = "results/differential_analysis",
-    padj_cut    = 0.05,
-    lfc_cut     = 1.0
+  
+  # Filter low count genes (keep genes with rowSums >= 10)
+  proj_count_mat <- proj_count_mat[which(rowSums(proj_count_mat) >= 10), ]
+  message(sprintf("After filtering low count genes: %d genes", nrow(proj_count_mat)))
+  
+  # Prepare conditions data frame (simple design, no age covariate)
+  conditions <- data.frame(
+    row.names = proj_samples$sample_submitter_id,
+    Type = factor(age_acc_class, levels = c("Q1", "Q4"))
   )
-)
-
-#======================================================================
-# Argument parsing – very flexible
-#======================================================================
-
-parse_args <- function(args) {
-  if (length(args) == 0) {
-    return(default_params[c("BRCA", "KIRC", "LIHC")])
-  }
-
-  # If first argument is an existing file → legacy single-run mode
-  if (file.exists(args[1])) {
-    return(list(custom = list(
-      project     = args[3] %||% "custom",
-      counts_path = args[1],
-      clock_path  = args[2],
-      clock_col   = args[4] %||% "ageAcc2.Horvath",
-      out_dir     = args[5] %||% "results/differential_analysis",
-      padj_cut    = as.numeric(args[6]) %||% 0.05,
-      lfc_cut     = as.numeric(args[7]) %||% 1.0
-    )))
-  }
-
-  # Otherwise treat arguments as cohort names (comma/space separated)
-  wanted <- unique(trimws(unlist(strsplit(paste(args, collapse = " "), "[, ]+"))))
-  wanted <- wanted[nzchar(wanted)]
-  if (!length(wanted)) wanted <- names(default_params)
-
-  unknown <- setdiff(wanted, names(default_params))
-  if (length(unknown)) stop("Unknown cohort(s): ", paste(unknown, collapse = ", "))
-
-  default_params[wanted]
-}
-
-`%||%` <- function(a, b) if (is.null(a) || length(a) == 0) b else a
-
-#======================================================================
-# Core workflow (one cohort)
-#======================================================================
-
-run_one <- function(p) {
-  message("\n=== ", p$project, " ===\n")
-
-  # 1. Load counts
-  if (!file.exists(p$counts_path)) stop("Counts file not found: ", p$counts_path)
-  counts_raw <- fread(p$counts_path)
-  if (!"gene_id" %in% names(counts_raw)) stop("No gene_id column")
-  gene_id <- counts_raw$gene_id
-  count_mat <- as.matrix(counts_raw[, -"gene_id", with = FALSE])
-  rownames(count_mat) <- gene_id
-  storage.mode(count_mat) <- "integer"
-  colnames(count_mat) <- sub("^X", "", colnames(count_mat))
-
-  # 2. Load clock predictions
-  if (!file.exists(p$clock_path)) stop("Clock file not found: ", p$clock_path)
-  clock_df <- readRDS(p$clock_path)
-  if (!"id" %in% names(clock_df)) stop("Clock RDS must contain column 'id'")
-  clock_df$clock_val <- as.numeric(clock_df[[p$clock_col]])
-  clock_df <- clock_df[!is.na(clock_df$clock_val), ]
-  clock_df$short   <- shorten_barcode(clock_df$id)
-  clock_df$clean   <- sanitize_sample(clock_df$id)
-
-  # 3. Build sample annotation that matches the count matrix
-  sample_info <- data.frame(
-    raw_name   = colnames(count_mat),
-    short      = shorten_barcode(colnames(count_mat)),
-    clean      = sanitize_sample(colnames(count_mat)),
-    stringsAsFactors = FALSE
+  
+  # Create DESeq2 dataset
+  dds <- DESeqDataSetFromMatrix(
+    countData = proj_count_mat,
+    colData = conditions,
+    design = ~ Type
   )
-
-  label_map <- load_labels(p$labels_path)
-
-  # Try to match first by short barcode, then by cleaned full barcode
-  merged <- merge(sample_info, clock_df[, c("short", "clean", "clock_val")],
-                  by = "short", all.x = FALSE)
-  if (nrow(merged) == 0) {
-    merged <- merge(sample_info, clock_df[, c("short", "clean", "clock_val")],
-                    by.x = "clean", by.y = "clean", all.x = FALSE)
-  }
-  if (nrow(merged) < 10) stop("Fewer than 10 overlapping samples – something is wrong with IDs")
-
-  if (!is.null(label_map)) {
-    merged <- merge(merged, label_map, by.x = "short", by.y = "sample_id", all.x = TRUE, sort = FALSE)
-    matched_labels <- sum(!is.na(merged$classification))
-    if (matched_labels > 0) {
-      message(sprintf("Applied %d provided classifications (Accelerated lower tail)", matched_labels))
-      merged$Type <- merged$classification
-    } else {
-      warning("Classification sheet provided but no sample IDs overlapped; falling back to clock sign")
-    }
-    merged$classification <- NULL
-  }
-
-  if (!"Type" %in% names(merged)) {
-    merged$Type <- NA_character_
-  }
-
-  if (anyNA(merged$Type)) {
-    fallback_idx <- which(is.na(merged$Type))
-    if (length(fallback_idx)) {
-      merged$Type[fallback_idx] <- ifelse(merged$clock_val[fallback_idx] < 0, "Accelerated", "Decelerated")
-      message(sprintf("Assigned %d samples from clock sign (Accelerated = lower residual)", length(fallback_idx)))
-    }
-  }
-  merged$Type <- factor(merged$Type, levels = c("Accelerated", "Decelerated"))
-  merged$Type <- factor(merged$Type, levels = c("Accelerated", "Decelerated"))
-
-  message("Samples retained: ", nrow(merged),
-          " (", sum(merged$Type == "Accelerated"), " Accel, ",
-                sum(merged$Type == "Decelerated"), " Decel)")
-
-  # Subset & order count matrix exactly to the merged table
-  count_mat <- count_mat[, merged$raw_name, drop = FALSE]
-
-  # 4. Filter low-count genes
-  keep_genes <- rowSums(count_mat) >= 10
-  message("Genes before/after filtering: ", nrow(count_mat), " → ", sum(keep_genes))
-  count_mat <- count_mat[keep_genes, , drop = FALSE]
-
-  # 5. DESeq2
-  colData <- DataFrame(Type = merged$Type, row.names = merged$raw_name)
-  dds <- DESeqDataSetFromMatrix(countData = count_mat,
-                                colData = colData,
-                                design = ~ Type)
-  dds <- DESeq(dds, quiet = TRUE)
-  res <- results(dds, contrast = c("Type", "Accelerated", "Decelerated"))
-  vst_mat <- vst(dds, blind = FALSE)
-
-  # 6. Results table
-  res_dt <- as.data.table(as.data.frame(res), keep.rownames = "gene_id")
-  res_dt[, significant := padj < p$padj_cut & abs(log2FoldChange) >= p$lfc_cut & !is.na(padj)]
-
-  message("Significant genes: ", sum(res_dt$significant))
-
-  # 7. Plots
-  pca_plot <- plotPCA(vst_mat, intgroup = "Type", returnData = FALSE) +
-    ggtitle(paste(p$project, "– VST PCA")) +
-    theme_minimal(base_size = 14) +
-    theme(legend.position = "bottom")
-
+  
+  # Run DESeq2 analysis
+  dds <- DESeq(dds)
+  vsd <- vst(dds, blind = FALSE)
+  
+  # Create output file names
+  proj_short <- gsub("TCGA-", "", project_name)
+  output_prefix <- paste0("results/differential_analysis/", proj_short)
+  
+  # PCA plot
+  pca_plot <- plotPCA(vsd, intgroup = c("Type"))
+  pca_plot <- pca_plot + 
+    scale_color_manual(values = c("Q1" = "grey60", "Q4" = "red")) +
+    ggtitle(paste0("PCA: ", project_name)) +
+    theme_minimal()
+  ggsave(paste0(output_prefix, "_pca_plot.png"), plot = pca_plot, width = 8, height = 6)
+  message(sprintf("PCA plot saved for %s", project_name))
+  
+  # Generate DE results
+  res <- results(dds, contrast = c("Type", "Q4", "Q1"))
+  res_df <- as.data.frame(res)
+  res_sig <- subset(res_df, !is.na(padj) & padj < 0.05)
+  res_sig <- res_sig[order(res_sig$padj), ]
+  message(sprintf("Significant genes (padj < 0.05): %d", nrow(res_sig)))
+  
+  # Save results
+  saveRDS(res, paste0(output_prefix, "_deseq2_results.rds"))
+  write.csv(res_sig, paste0(output_prefix, "_significant_genes.csv"))
+  message(sprintf("DESeq2 results saved for %s", project_name))
+  
+  # Volcano plot with color coding for significance
   volcano_df <- as.data.frame(res)
   volcano_df$gene <- rownames(volcano_df)
-  volcano_df$`-log10(padj)` <- -log10(pmax(volcano_df$padj, .Machine$double.xmin))
-  volcano_df$sig <- "Not sig."
-  volcano_df$sig[volcano_df$padj < p$padj_cut &
-                 abs(volcano_df$log2FoldChange) >= p$lfc_cut] <- "Significant"
-
-  volcano_plot <- ggplot(volcano_df,
-                         aes(x = log2FoldChange, y = `-log10(padj)`, color = sig)) +
-    geom_point(alpha = 0.7, size = 1.2) +
-    scale_color_manual(values = c("grey60", "#d62728")) +
-    geom_vline(xintercept = c(-p$lfc_cut, p$lfc_cut), linetype = "dashed", colour = "grey40") +
-    geom_hline(yintercept = -log10(p$padj_cut), linetype = "dashed", colour = "grey40") +
-    labs(title = paste(p$project, "– Volcano Plot"),
-         x = expression(Log[2]~Fold~Change),
+  
+  log2FC_cutoff <- 1
+  padj_cutoff <- 0.05
+  
+  volcano_df$color <- "Not significant"
+  volcano_df$color[volcano_df$padj < padj_cutoff & abs(volcano_df$log2FoldChange) > log2FC_cutoff] <- "Significant"
+  
+  volcano_plot <- ggplot(volcano_df, aes(x = log2FoldChange, y = -log10(padj), color = color)) +
+    geom_point(alpha = 0.6, size = 1.5) +
+    scale_color_manual(values = c("Not significant" = "grey", "Significant" = "red")) +
+    geom_vline(xintercept = c(-log2FC_cutoff, log2FC_cutoff), linetype = "dashed") +
+    geom_hline(yintercept = -log10(padj_cutoff), linetype = "dashed") +
+    labs(title = paste0("Volcano Plot: ", project_name, " (Q4 vs Q1)"),
+         x = expression(Log[2]~Fold~Change), 
          y = expression(-Log[10]~adjusted~p)) +
-    theme_minimal(base_size = 14) +
-    theme(legend.position = "none")
-
-  # 8. Write everything
-  dir.create(p$out_dir, showWarnings = FALSE, recursive = TRUE)
-  out_prefix <- file.path(p$out_dir, paste0(p$project, "_accel_vs_decel"))
-
-  fwrite(res_dt, paste0(out_prefix, "_full_results.tsv"), sep = "\t")
-  fwrite(res_dt[significant == TRUE], paste0(out_prefix, "_significant.tsv"), sep = "\t")
-  ggsave(paste0(out_prefix, "_PCA.png"),    pca_plot,     width = 7, height = 6, dpi = 300)
-  ggsave(paste0(out_prefix, "_volcano.png"), volcano_plot, width = 7, height = 6, dpi = 300)
-
-  message("→ Done! Files written to ", p$out_dir)
+    theme_minimal()
+  ggsave(paste0(output_prefix, "_volcano_plot.png"), plot = volcano_plot, width = 8, height = 6)
+  message(sprintf("Volcano plot saved for %s", project_name))
+  
+  return(list(dds = dds, res = res, res_sig = res_sig, project = project_name))
 }
 
-#======================================================================
-# Main
-#======================================================================
+# Run DE analysis for each project
+results_list <- list()
 
-main <- function() {
-  args <- commandArgs(trailingOnly = TRUE)
-  cohorts <- parse_args(args)
-
-  for (i in seq_along(cohorts)) {
-    tryCatch({
-      run_one(cohorts[[i]])
-    }, error = function(e) {
-      message("\n!!! Error in ", cohorts[[i]]$project, ": ", e$message, "\n")
-    })
+# BRCA and THCA: within-tissue quartiles
+for (proj in tissue_projects) {
+  result <- run_de_analysis(proj, gdc_pancan, count_matrix, use_pancan_quartiles = FALSE)
+  if (!is.null(result)) {
+    results_list[[proj]] <- result
   }
 }
 
-if (identical(environment(), globalenv())) {
-  main()
+# UCEC: pan-cancer quartiles
+for (proj in pancan_projects) {
+  result <- run_de_analysis(proj, gdc_pancan, count_matrix, use_pancan_quartiles = TRUE)
+  if (!is.null(result)) {
+    results_list[[proj]] <- result
+  }
 }
+
+# Save combined results summary
+saveRDS(results_list, "results/differential_analysis/all_de_results.rds")
+message("\n========== All differential expression analyses completed ==========")
+message(sprintf("Successfully analyzed: %s", paste(names(results_list), collapse = ", ")))

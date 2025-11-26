@@ -27,7 +27,7 @@ if (!dir.exists("results/tissue_analysis")) {
 # ============================================================================
 
 # Load predictions
-predictions <- readRDS("results/clock/gdc_pan/gdc_pancan_predictions.rds")
+predictions <- readRDS("results/rna/gdc_pancan_rna_predictions.rds")
 message(sprintf("Loaded %d samples with predictions", nrow(predictions)))
 
 # Load phenotype data
