@@ -1,3 +1,5 @@
 /processed/tcga_brca_barcodes.txt
 /GDCrnaseq/TCGA*
 /GDCrnaseq
+/rna/TCGA*
+/rna/*.rds
